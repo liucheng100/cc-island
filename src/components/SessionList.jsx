@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import SessionCard from './SessionCard';
 
 const FILTERS = {
@@ -7,9 +7,33 @@ const FILTERS = {
   completed: { label: '已完成', icon: '✓' },
 };
 
-export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMessage }) {
+export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMessage, onFocusCMD }) {
   const [filter, setFilter] = useState('all');
   const [searchText, setSearchText] = useState('');
+  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
+
+  // JS-based drag for the session list window via header
+  const handleHeaderDown = useCallback((e) => {
+    dragRef.current = { dragging: true, startX: e.screenX, startY: e.screenY, moved: false };
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragRef.current.dragging) return;
+      const dx = e.screenX - dragRef.current.startX;
+      const dy = e.screenY - dragRef.current.startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragRef.current.moved = true;
+      if (dragRef.current.moved && window.ccIsland) {
+        window.ccIsland.moveWindow(dx, dy);
+        dragRef.current.startX = e.screenX;
+        dragRef.current.startY = e.screenY;
+      }
+    };
+    const onUp = () => { dragRef.current.dragging = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, []);
 
   const filteredSessions = useMemo(() => {
     let result = sessions;
@@ -39,7 +63,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
     <div className="session-list">
       {/* Header */}
       <div className="list-header">
-        <div className="list-header-top">
+        <div className="list-header-top" onMouseDown={handleHeaderDown} style={{ cursor: 'grab' }}>
           <h2 className="list-title">Claude Code 灵动岛</h2>
           <div className="header-actions">
             <div className={`wechat-status-badge ${wechatStatus.connected ? 'connected' : ''}`}>
@@ -109,6 +133,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                 session={session}
                 onShowQR={onShowQR}
                 onSendMessage={onSendMessage}
+                onFocusCMD={onFocusCMD}
               />
             ))}
           </div>

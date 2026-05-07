@@ -1,12 +1,24 @@
-// Web Audio API based notification sounds — no external files needed
+// Web Audio API notification sounds — no external files needed
+// AudioContext starts suspended until user gesture — we resume on first interaction
 
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx = null;
+let resumed = false;
 
 function getCtx() {
   if (!audioCtx) audioCtx = new AudioCtx();
+  if (!resumed && audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => { resumed = true; }).catch(() => {});
+  }
   return audioCtx;
 }
+
+// Resume on first user gesture
+document.addEventListener('mousedown', () => {
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => { resumed = true; }).catch(() => {});
+  }
+}, { once: true });
 
 function playTone(freq, duration, type = 'sine', volume = 0.3) {
   try {

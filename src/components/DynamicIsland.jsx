@@ -7,8 +7,8 @@ const STATUS_COLORS = {
 
 export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onClick }) {
   const [animationState, setAnimationState] = useState('idle');
+  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false, winX: 0, winY: 0 });
   const islandRef = useRef(null);
-  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
 
   const activeCount = sessions.filter((s) => s.status === 'working' || s.status === 'thinking').length;
   const completedCount = sessions.filter((s) => s.status === 'completed').length;
@@ -18,7 +18,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     setAnimationState(isExpanded ? 'expanded' : 'collapsed');
   }, [isExpanded]);
 
-  // JS-based drag for the frameless window
+  // Pure JS drag — no -webkit-app-region needed
   const handleMouseDown = useCallback((e) => {
     dragRef.current.dragging = true;
     dragRef.current.startX = e.screenX;
@@ -29,16 +29,18 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
   useEffect(() => {
     const onMove = (e) => {
       if (!dragRef.current.dragging) return;
-      const dx = Math.abs(e.screenX - dragRef.current.startX);
-      const dy = Math.abs(e.screenY - dragRef.current.startY);
-      if (dx > 3 || dy > 3) {
+      const dx = e.screenX - dragRef.current.startX;
+      const dy = e.screenY - dragRef.current.startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
         dragRef.current.moved = true;
       }
-      // Use Electron's window.moveBy via a hidden API or CSS transform
-      // For frameless windows, we use -webkit-app-region: drag
-      // which is handled in the CSS below for the outer island
+      if (dragRef.current.moved && window.ccIsland) {
+        window.ccIsland.moveWindow(dx, dy);
+        dragRef.current.startX = e.screenX;
+        dragRef.current.startY = e.screenY;
+      }
     };
-    const onUp = (e) => {
+    const onUp = () => {
       if (!dragRef.current.dragging) return;
       dragRef.current.dragging = false;
       if (!dragRef.current.moved) {
@@ -76,14 +78,12 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
             </div>
           )}
         </div>
-
         <div className="island-info">
           <div className="island-title">Claude Code</div>
           <div className="island-subtitle">
             {totalCount === 0 ? '等待 Claude 启动...' : `${activeCount} 工作中 · ${completedCount} 已完成`}
           </div>
         </div>
-
         <div className="island-status">
           {totalCount > 0 && (
             <div className="session-dots">
@@ -107,7 +107,6 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
           </div>
         </div>
       </div>
-
       <style>{`
         .dynamic-island {
           width: 280px; height: 44px; border-radius: 22px;
@@ -115,9 +114,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
           backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
           border: 1px solid var(--border-subtle);
           cursor: grab; transition: all var(--transition);
-          user-select: none;
-          -webkit-app-region: drag;
-          position: relative; overflow: hidden;
+          user-select: none; position: relative; overflow: hidden;
         }
         .dynamic-island:active { cursor: grabbing; }
         .dynamic-island::before {
@@ -128,17 +125,14 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
         }
         .dynamic-island:hover { border-color: var(--border-active); transform: scale(1.02); box-shadow: var(--shadow-glow); }
         .dynamic-island.has-activity::before { opacity: 0.6; animation: pulse-glow 2s ease-in-out infinite; }
-
-        .island-inner {
-          display: flex; align-items: center; height: 100%; padding: 0 12px; gap: 10px;
-        }
+        .island-inner { display: flex; align-items: center; height: 100%; padding: 0 12px; gap: 10px; pointer-events: none; }
         .island-icon { flex-shrink: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }
         .working-indicator { display: flex; align-items: center; justify-content: center; }
         .dot-pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--glow-color); animation: pulse-glow 1.5s ease-in-out infinite; }
         .idle-icon { color: var(--text-secondary); opacity: 0.7; }
         .island-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-        .island-title { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .island-subtitle { font-size: 10px; color: var(--text-secondary); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .island-title { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
+        .island-subtitle { font-size: 10px; color: var(--text-secondary); line-height: 1.2; }
         .island-status { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
         .session-dots { display: flex; align-items: center; gap: 3px; }
         .session-dots .dot { width: 6px; height: 6px; border-radius: 50%; animation: breathe 2s ease-in-out infinite; }

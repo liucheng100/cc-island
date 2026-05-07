@@ -1,24 +1,7 @@
-Error
-X
-A JavaScript error occurred in the main process
-x
-X
-Uncaught Exception:
-E:我的项目
-lagent)cc-island)release\win-unpacked)resources\app.asar\electron)session-.:133
-const cwd = await this.extractCwd(pid,cmdLine);
-AAAAA
-SyntaxError: await is only valid in async functions and the top level bodies of
-modules
-at wrapSafe(node:internal/modules/cjs/loader:1750:18)
-at Module._compile(node:internal/modules/cjs/loader:1793:20)
-at Module._extensions.js(node:internal/modules/cjs/loader:1953:10)
-at Module.load (node:internal/modules/cjs/loader:1540:32)
-at Module._load (node:internal/modules/cjs/loader:1342:12)
-at c._load (node:electron/js2c/node_init:2:18060)
-at wrapModuleLoad (node:internal/modules/cjs/loader:262:19)
-at Module.require(node:internal/modules/cjs/loader:1563:12)
-at require (node:internal/modules/helpers:152:16)
-at Object.<anonymous>(E:我的项目
-lagent(cc-island)release(win-unpacked(resources(app.asar)electron)main.js:4:28)
-确定
+再来记录几个bug
+你需要创建一个memory.md文件来记录所有的一个经验教训包括之前怎么解决的bug之后就不许再犯了还有之前犯过的一些错之后都不许再犯了
+刚刚任务结束你没有发出一个蜂鸣声来提示我任务结束了
+然后现在我的灵动岛点击以后它又没有反应了不会弹出窗口
+然后现在弹出的窗口不能拖拽移动了
+窗口中的cloud code的任务我并不能看到人物对话的上下文然后我去对某一个任务输入内容发送过去他也没有真实的一个回馈和反应换
+我需要点击某个cloud code的任务它能将对应的cmd窗口给我弹出来

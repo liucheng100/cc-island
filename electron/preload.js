@@ -1,27 +1,26 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('ccIsland', {
-  // Session
   getSessions: () => ipcRenderer.invoke('get-sessions'),
   getSessionDetail: (sessionId) => ipcRenderer.invoke('get-session-detail', sessionId),
   sendToSession: (sessionId, message) => ipcRenderer.invoke('send-to-session', sessionId, message),
+  focusSessionWindow: (sessionId) => ipcRenderer.invoke('focus-session-window', sessionId),
 
-  // Island
   toggleIsland: () => ipcRenderer.invoke('toggle-island'),
   getIslandState: () => ipcRenderer.invoke('get-island-state'),
 
-  // WeChat
   getWechatStatus: () => ipcRenderer.invoke('get-wechat-status'),
   startWechatBridge: () => ipcRenderer.invoke('start-wechat-bridge'),
   stopWechatBridge: () => ipcRenderer.invoke('stop-wechat-bridge'),
 
-  // QR / Tunnel
   getQRCodeUrl: (sessionId) => ipcRenderer.invoke('get-qrcode-url', sessionId),
   getTunnelStatus: () => ipcRenderer.invoke('get-tunnel-status'),
   startTunnel: () => ipcRenderer.invoke('start-tunnel'),
   stopTunnel: () => ipcRenderer.invoke('stop-tunnel'),
 
-  // Events
+  // Pure JS window drag — no -webkit-app-region needed
+  moveWindow: (dx, dy) => ipcRenderer.send('move-window', dx, dy),
+
   onSessionsUpdated: (callback) => {
     ipcRenderer.on('sessions:updated', (_, sessions) => callback(sessions));
     return () => ipcRenderer.removeAllListeners('sessions:updated');

@@ -359,6 +359,21 @@ class SessionMonitor extends EventEmitter {
     return { ...session, messages: session.messages || [] };
   }
 
+  // Focus the actual CMD/console window for this session
+  async focusSessionWindow(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.pid) return false;
+    try {
+      // Use PowerShell to find and focus the console window for the process
+      const psScript = `powershell -NoProfile -Command "$pid=${session.pid}; Add-Type -Name WinAPI -Namespace Temp -MemberDefinition '[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetForegroundWindow();'; $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue; if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) { [Temp.WinAPI]::ShowWindow($proc.MainWindowHandle, 9); [Temp.WinAPI]::SetForegroundWindow($proc.MainWindowHandle) }"`;
+      const { exec } = require('child_process');
+      exec(psScript, { timeout: 5000 }, () => {});
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async sendToSession(sessionId, message) {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
