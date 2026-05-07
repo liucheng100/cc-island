@@ -54,8 +54,10 @@ function createSessionListWindow() {
   const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
   sessionListWindow = makeWin({
     width: 420, height: 640,
+    minWidth: 420, maxWidth: 420,
+    minHeight: 640, maxHeight: 640,
     x: screenWidth - 440, y: 80,
-    resizable: true, hasShadow: true,
+    resizable: false, hasShadow: true,
   });
   sessionListWindow.setAlwaysOnTop(true, 'screen-saver', 1);
   sessionListWindow.loadURL(getUrl('sessions'));
@@ -103,13 +105,20 @@ function setupIPC() {
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
   ipcMain.handle('focus-session-window', (_, id) => sessionMonitor ? sessionMonitor.focusSessionWindow(id) : false);
 
-  // Pure JS window drag — use setBounds to keep size stable
+  // Pure JS window drag — keep known fixed window sizes stable
   ipcMain.on('move-window', (event, dx, dy) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win) {
       const [x, y] = win.getPosition();
-      const [w, h] = win.getSize();
-      win.setBounds({ x: x + dx, y: y + dy, width: w, height: h });
+      const fixedSize = win === islandWindow
+        ? { width: 300, height: 56 }
+        : win === sessionListWindow
+          ? { width: 420, height: 640 }
+          : (() => {
+              const [width, height] = win.getSize();
+              return { width, height };
+            })();
+      win.setBounds({ x: x + dx, y: y + dy, ...fixedSize }, false);
     }
   });
 }

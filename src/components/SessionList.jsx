@@ -10,11 +10,13 @@ const FILTERS = {
 export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMessage, onFocusCMD }) {
   const [filter, setFilter] = useState('all');
   const [searchText, setSearchText] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
 
   // JS-based drag for the session list window via header
   const handleHeaderDown = useCallback((e) => {
     dragRef.current = { dragging: true, startX: e.screenX, startY: e.screenY, moved: false };
+    setIsDragging(true);
   }, []);
 
   useEffect(() => {
@@ -29,7 +31,10 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         dragRef.current.startY = e.screenY;
       }
     };
-    const onUp = () => { dragRef.current.dragging = false; };
+    const onUp = () => {
+      dragRef.current.dragging = false;
+      setIsDragging(false);
+    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
@@ -60,7 +65,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   }, [sessions]);
 
   return (
-    <div className="session-list">
+    <div className={`session-list ${isDragging ? 'dragging' : ''}`}>
       {/* Header */}
       <div className="list-header">
         <div className="list-header-top" onMouseDown={handleHeaderDown} style={{ cursor: 'grab' }}>
