@@ -50,7 +50,7 @@ class SessionMonitor extends EventEmitter {
             workingDuration: 0,
           };
           this.sessions.set(key, session);
-          console.log(`[SessionMonitor] New: ${proc.name} (${key})`);
+          console.log(`[SessionMonitor] New: ${proc.name} (${key}) pid=${proc.pid} parent=${proc.parentPid} terminal=${proc.terminalPid} cwd=${proc.cwd}`);
         } else {
           const existing = this.sessions.get(key);
           existing.pid = proc.pid; // update PID in case process restarted
@@ -156,16 +156,21 @@ class SessionMonitor extends EventEmitter {
     // Walk up parent chain to find CMD/PowerShell/Windows Terminal/conhost
     const terminalNames = new Set(['cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'conhost.exe']);
     let currentPid = parentPid || pid;
+    const chain = [];
     for (let i = 0; i < 10; i++) {
       if (!currentPid || currentPid === 0) break;
       const info = await this.getProcessInfo(currentPid);
       if (!info) break;
       const name = (info.Name || '').toLowerCase();
-      if (terminalNames.has(name)) return currentPid;
+      chain.push(`${name}(${currentPid})`);
+      if (terminalNames.has(name)) {
+        console.log(`[SessionMonitor] Terminal for pid=${pid}: ${chain.join(' -> ')}`);
+        return currentPid;
+      }
       if (!info.ParentProcessId || info.ParentProcessId === 0) break;
       currentPid = info.ParentProcessId;
     }
-    // Fallback: return parent if it exists, else pid itself
+    console.log(`[SessionMonitor] No terminal found for pid=${pid}: ${chain.join(' -> ')}`);
     return parentPid || pid;
   }
 
@@ -215,17 +220,17 @@ class SessionMonitor extends EventEmitter {
 
   async getProcessInfo(pid) {
     return new Promise((resolve) => {
-      const cmd = `wmic process where ProcessId=${pid} get Name,ParentProcessId,CommandLine /format:csv 2>nul`;
-      exec(cmd, { timeout: 3000 }, (err, stdout) => {
-        if (err || !stdout) { resolve(null); return; }
-        const lines = stdout.trim().split('\n').filter(l => l.trim());
-        if (lines.length < 2) { resolve(null); return; }
-        const parts = lines[1].split(',');
-        resolve({
-          Name: (parts[1] || '').trim(),
-          ParentProcessId: parseInt(parts[2]) || 0,
-          CommandLine: parts.slice(3).join(',').trim(),
-        });
+      const ps = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object Name,ParentProcessId,CommandLine | ConvertTo-Json"`;
+      exec(ps, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) { resolve(null); return; }
+        try {
+          const obj = JSON.parse(stdout.trim());
+          resolve({
+            Name: (obj.Name || '').trim(),
+            ParentProcessId: parseInt(obj.ParentProcessId) || 0,
+            CommandLine: (obj.CommandLine || '').trim(),
+          });
+        } catch (e) { resolve(null); }
       });
     });
   }
@@ -419,10 +424,11 @@ class SessionMonitor extends EventEmitter {
   // Focus the CMD/console window for this session
   async focusSessionWindow(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (!session || !session.pid) return false;
+    if (!session || !session.pid) { console.log('[Focus] No session for', sessionId); return false; }
     const targetPid = session.pid;
     const parentPid = session.parentPid || 0;
     const terminalPid = session.terminalPid || parentPid || targetPid;
+    console.log('[Focus] sessionId=' + sessionId + ' targetPid=' + targetPid + ' parentPid=' + parentPid + ' terminalPid=' + terminalPid + ' cwd=' + (session.cwd || ''));
     try {
       const psScript = `powershell -NoProfile -Command "
 Add-Type @'
@@ -435,13 +441,16 @@ public class WinFocus {
 }
 '@
 function Try-Focus([int]\$pid) {
-  if (-not \$pid -or \$pid -eq 0) { return \$false }
+  if (-not \$pid -or \$pid -eq 0) { Write-Output \"skip: pid=0\"; return \$false }
   \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
-  if (-not \$p) { return \$false }
-  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$p.MainWindowHandle)) {
-    [WinFocus]::ShowWindow(\$p.MainWindowHandle, 9) | Out-Null
+  if (-not \$p) { Write-Output \"no process: \$pid\"; return \$false }
+  \$h = \$p.MainWindowHandle
+  Write-Output \"check: \$pid name=\$(\$p.ProcessName) handle=\$h visible=\$([WinFocus]::IsWindowVisible(\$h))\"
+  if (\$h -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$h)) {
+    [WinFocus]::ShowWindow(\$h, 9) | Out-Null
     Start-Sleep -Milliseconds 80
-    [WinFocus]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
+    [WinFocus]::SetForegroundWindow(\$h) | Out-Null
+    Write-Output \"focused: \$pid\"
     return \$true
   }
   return \$false
@@ -449,38 +458,32 @@ function Try-Focus([int]\$pid) {
 \$terminalPid = ${terminalPid}
 \$parentPid = ${parentPid}
 \$targetPid = ${targetPid}
+Write-Output \"terminal=\$terminalPid parent=\$parentPid target=\$targetPid\"
 if (Try-Focus \$terminalPid) { exit 0 }
-if (Try-Focus \$parentPid) { exit 0 }
-if (Try-Focus \$targetPid) { exit 0 }
+if (\$parentPid -ne \$terminalPid -and (Try-Focus \$parentPid)) { exit 0 }
+if (\$targetPid -ne \$terminalPid -and \$targetPid -ne \$parentPid -and (Try-Focus \$targetPid)) { exit 0 }
 \$current = \$terminalPid
-for (\$i = 0; \$i -lt 10; \$i++) {
+for (\$i = 0; \$i -lt 5; \$i++) {
   if (-not \$current -or \$current -eq 0) { break }
   \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
   if (-not \$proc) { break }
   \$current = [int]\$proc.ParentProcessId
   if (Try-Focus \$current) { exit 0 }
 }
-function Focus-Children([int]\$pid, [int]\$depth) {
-  if (\$depth -le 0) { return \$false }
-  \$children = Get-CimInstance Win32_Process -Filter \"ParentProcessId=\$pid\" -ErrorAction SilentlyContinue
-  foreach (\$child in \$children) {
-    if (Try-Focus \$child.ProcessId) { return \$true }
-    if (Focus-Children \$child.ProcessId (\$depth - 1)) { return \$true }
-  }
-  return \$false
-}
-if (Focus-Children \$targetPid 4) { exit 0 }
 exit 1
 \""`;
       const { exec } = require('child_process');
       return await new Promise((resolve) => {
-        exec(psScript, { timeout: 10000 }, (err) => {
-          if (err) console.error('[SessionMonitor] Focus failed for', sessionId);
-          else console.log('[SessionMonitor] Focus OK for', sessionId);
+        exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
+          if (stdout) console.log('[Focus stdout]', stdout.trim());
+          if (stderr) console.log('[Focus stderr]', stderr.trim());
+          if (err) console.error('[Focus] FAILED for', sessionId, err.message);
+          else console.log('[Focus] OK for', sessionId);
           resolve(!err);
         });
       });
     } catch (e) {
+      console.error('[Focus] exception:', e.message);
       return false;
     }
   }
