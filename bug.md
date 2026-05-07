@@ -1,35 +1,24 @@
-# 🐛 Bug 记录
-
-> 测试版本: CC Island v1.0.2
-> 测试日期: 2026-05-07
-
----
-
-## 待修复
-
-| # | 问题描述 | 严重程度 | 状态 | 修复日期 |
-|---|---------|---------|------|---------|
-| - | 暂无 | - | - | - |
-
----
-
-## 已修复
-
-| # | 问题描述 | 严重程度 | 状态 | 修复日期 |
-|---|---------|---------|------|---------|
-| 1 | 灵动岛不能拖拽 | P0 | ✅ | 2026-05-07 |
-| 2 | 点击灵动岛窗口闪退 | P0 | ✅ | 2026-05-07 |
-| 3 | 显示假会话，不能检测真实 Claude CMD | P0 | ✅ | 2026-05-07 |
-| 4 | 微信通信仅支持局域网 | P1 | ✅ | 2026-05-07 |
-| 5 | 点击灵动岛仍然弹不出面板 | P0 | ✅ | 2026-05-07 |
-| 6 | 任务不断增多 + 每个任务展不开 | P0 | ✅ | 2026-05-07 |
-| 7 | 需确保检测到的任务是真实的 Claude Code 进程 | P0 | ✅ | 2026-05-07 |
-
----
-
-### 修复详情
-
-**v1.0.2:**
-- Bug 5 (弹不出面板): `-webkit-app-region: drag` 会拦截所有 DOM 事件。改用 App.jsx 动态设置 body drag/no-drag，岛窗口 drag，会话窗 no-drag
-- Bug 6 (任务增多+展不开): 会话窗 body 继承 drag 导致所有点击被拦截。改用 CWD 作 session key（非 PID）防重复。SessionCard 添加 explicit onClick + no-drag
-- Bug 7 (任务真实性): PowerShell 精准匹配 `@anthropic-ai/claude-code` / `claude-code` / Claude 进程名。排除自身进程。查询进程 CWD 确认项目目录
+Error
+X
+A JavaScript error occurred in the main process
+x
+X
+Uncaught Exception:
+E:我的项目
+lagent)cc-island)release\win-unpacked)resources\app.asar\electron)session-.:133
+const cwd = await this.extractCwd(pid,cmdLine);
+AAAAA
+SyntaxError: await is only valid in async functions and the top level bodies of
+modules
+at wrapSafe(node:internal/modules/cjs/loader:1750:18)
+at Module._compile(node:internal/modules/cjs/loader:1793:20)
+at Module._extensions.js(node:internal/modules/cjs/loader:1953:10)
+at Module.load (node:internal/modules/cjs/loader:1540:32)
+at Module._load (node:internal/modules/cjs/loader:1342:12)
+at c._load (node:electron/js2c/node_init:2:18060)
+at wrapModuleLoad (node:internal/modules/cjs/loader:262:19)
+at Module.require(node:internal/modules/cjs/loader:1563:12)
+at require (node:internal/modules/helpers:152:16)
+at Object.<anonymous>(E:我的项目
+lagent(cc-island)release(win-unpacked(resources(app.asar)electron)main.js:4:28)
+确定

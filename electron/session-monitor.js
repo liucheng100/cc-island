@@ -105,7 +105,7 @@ class SessionMonitor extends EventEmitter {
       // Claude Code Desktop: process name is "Claude" or "Claude Code"
       const psCmd = `powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process; $results = @(); foreach ($p in $procs) { $cl = if($p.CommandLine) { $p.CommandLine } else { '' }; $nm = if($p.Name) { $p.Name } else { '' }; if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code' -or $cl -match '\\\\\\\\claude\\\\b' -or $nm -match '^claude$' -or $nm -match '^Claude' -or $nm -match 'Claude Code') { $results += $p } }; $results | Select-Object ProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
 
-      exec(psCmd, { timeout: 10000 }, (err, stdout) => {
+      exec(psCmd, { timeout: 10000 }, async (err, stdout) => {
         if (err || !stdout || stdout.trim().length === 0) {
           this.findClaudeProcessesWMIC().then(resolve);
           return;
