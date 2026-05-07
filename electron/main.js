@@ -1,6 +1,6 @@
-const { app, BrowserWindow, Tray, ipcMain, nativeImage, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, ipcMain, screen } = require('electron');
 const path = require('path');
-const { createTray, getTray } = require('./tray');
+const { createTray } = require('./tray');
 const { SessionMonitor } = require('./session-monitor');
 const { LocalServer } = require('./local-server');
 const { WechatBridge } = require('./wechat-bridge');
@@ -11,14 +11,22 @@ let sessionMonitor = null;
 let localServer = null;
 let wechatBridge = null;
 let isIslandExpanded = false;
+let collapseTimeout = null;
+
+const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
+
+function getUrl(hash) {
+  if (isDev) return `http://localhost:5173/#/${hash}`;
+  return `file://${path.join(__dirname, '..', 'dist', 'index.html')}#/${hash}`;
+}
 
 function createIslandWindow() {
   const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
 
   islandWindow = new BrowserWindow({
-    width: 280,
-    height: 52,
-    x: screenWidth - 300,
+    width: 300,
+    height: 56,
+    x: screenWidth - 320,
     y: 20,
     frame: false,
     transparent: true,
@@ -39,26 +47,19 @@ function createIslandWindow() {
 
   islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
   islandWindow.setVisibleOnAllWorkspaces(true);
-
-  const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
-  const url = isDev
-    ? 'http://localhost:5173/#/island'
-    : `file://${path.join(__dirname, '..', 'dist', 'index.html')}#/island`;
-
-  islandWindow.loadURL(url);
+  islandWindow.loadURL(getUrl('island'));
   islandWindow.setContentProtection(true);
 
-  islandWindow.on('blur', () => {
-    if (isIslandExpanded) {
-      collapseIsland();
-    }
+  // Track mouse enter/leave for hover-aware behavior
+  islandWindow.on('show', () => {
+    if (isDev) islandWindow.webContents.openDevTools({ mode: 'detach' });
   });
 
   return islandWindow;
 }
 
 function createSessionListWindow() {
-  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
 
   sessionListWindow = new BrowserWindow({
     width: 420,
@@ -81,17 +82,11 @@ function createSessionListWindow() {
   });
 
   sessionListWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  sessionListWindow.loadURL(getUrl('sessions'));
 
-  const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
-  const url = isDev
-    ? 'http://localhost:5173/#/sessions'
-    : `file://${path.join(__dirname, '..', 'dist', 'index.html')}#/sessions`;
-
-  sessionListWindow.loadURL(url);
-
-  sessionListWindow.on('blur', () => {
-    collapseIsland();
-  });
+  if (isDev) {
+    sessionListWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 
   return sessionListWindow;
 }
@@ -99,6 +94,12 @@ function createSessionListWindow() {
 function expandIsland() {
   if (isIslandExpanded) return;
   isIslandExpanded = true;
+
+  // Clear any pending collapse
+  if (collapseTimeout) {
+    clearTimeout(collapseTimeout);
+    collapseTimeout = null;
+  }
 
   islandWindow.webContents.send('island:expand');
 
@@ -118,6 +119,19 @@ function collapseIsland() {
   if (sessionListWindow && !sessionListWindow.isDestroyed()) {
     sessionListWindow.hide();
   }
+}
+
+function scheduleCollapse() {
+  // Delayed collapse — allows clicking between windows without triggering immediate close
+  if (collapseTimeout) clearTimeout(collapseTimeout);
+  collapseTimeout = setTimeout(() => {
+    // Only collapse if both windows lost focus
+    const islandFocused = islandWindow && !islandWindow.isDestroyed() && islandWindow.isFocused();
+    const listFocused = sessionListWindow && !sessionListWindow.isDestroyed() && sessionListWindow.isFocused();
+    if (!islandFocused && !listFocused) {
+      collapseIsland();
+    }
+  }, 300);
 }
 
 function toggleIsland() {
@@ -152,6 +166,10 @@ function setupIPC() {
 
   ipcMain.handle('get-qrcode-url', async (_, sessionId) => {
     if (!localServer) return null;
+    const publicUrl = localServer.getPublicURL();
+    if (publicUrl) {
+      return `${publicUrl}/session/${sessionId}`;
+    }
     const port = localServer.getPort();
     const ip = localServer.getLocalIP();
     return `http://${ip}:${port}/session/${sessionId}`;
@@ -162,40 +180,41 @@ function setupIPC() {
   });
 
   ipcMain.handle('start-wechat-bridge', async () => {
-    if (wechatBridge) {
-      return wechatBridge.start();
-    }
+    if (wechatBridge) return wechatBridge.start();
     return false;
   });
 
   ipcMain.handle('stop-wechat-bridge', async () => {
-    if (wechatBridge) {
-      return wechatBridge.stop();
-    }
+    if (wechatBridge) return wechatBridge.stop();
     return false;
+  });
+
+  ipcMain.handle('get-tunnel-status', async () => {
+    return localServer ? localServer.getTunnelStatus() : null;
+  });
+
+  ipcMain.handle('start-tunnel', async () => {
+    return localServer ? localServer.startTunnel() : false;
+  });
+
+  ipcMain.handle('stop-tunnel', async () => {
+    return localServer ? localServer.stopTunnel() : false;
   });
 }
 
 app.whenReady().then(async () => {
-  // Initialize session monitor
   sessionMonitor = new SessionMonitor();
   sessionMonitor.start();
 
-  // Initialize local server for phone access
   localServer = new LocalServer();
   await localServer.start();
 
-  // Initialize WeChat bridge
   wechatBridge = new WechatBridge(localServer);
   wechatBridge.init();
 
-  // Create tray
   createTray(toggleIsland);
-
-  // Create floating island
   createIslandWindow();
 
-  // Setup IPC handlers
   setupIPC();
 
   // Forward session updates to renderer
@@ -206,7 +225,6 @@ app.whenReady().then(async () => {
     if (sessionListWindow && !sessionListWindow.isDestroyed() && isIslandExpanded) {
       sessionListWindow.webContents.send('sessions:updated', sessions);
     }
-    // Also forward to local server for phone clients
     if (localServer) {
       localServer.broadcastSessions(sessions);
     }
@@ -223,10 +241,11 @@ app.whenReady().then(async () => {
   });
 
   console.log('CC Island started successfully');
+  console.log(`Local server: http://${localServer.getLocalIP()}:${localServer.getPort()}`);
 });
 
 app.on('window-all-closed', () => {
-  // Don't quit on window close - keep running in tray
+  // Keep running in tray
 });
 
 app.on('before-quit', () => {
