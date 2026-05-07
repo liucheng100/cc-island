@@ -248,8 +248,6 @@ class LocalServer extends EventEmitter {
   }
 
   getPublicURL() {
-
-  getPublicURL() {
     return this.publicURL;
   }
 

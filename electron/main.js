@@ -1,5 +1,8 @@
 const { app, BrowserWindow, ipcMain, screen, Notification } = require('electron');
 const path = require('path');
+
+app.setPath('userData', path.join(app.getPath('appData'), 'CC Island'));
+
 const { createTray } = require('./tray');
 const { SessionMonitor } = require('./session-monitor');
 const { LocalServer } = require('./local-server');

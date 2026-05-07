@@ -81,11 +81,11 @@ Python (python/wechat_bridge.py)
 
 ## 用户偏好
 
-1. 修复 bug 后自动启动 `release\win-unpacked\CC Island.exe` 进行测试。
+1. 每次完成任务后自动启动 `release\win-unpacked\CC Island.exe` 进行测试。
 2. 从 `bug.md` 读取 bug，修复后在 `task.md` 中跟踪进度。
 3. 在有意义的变更后适时提交 git。
 4. `bug.md` 是用户的便签本 — 不要重新排版、重构或修改其格式，只从中读取 bug。
-5. 完成任务后通过 Web Audio API 播放完成音效。
+5. 每次完成任务我会在终端播放提示音。
 6. 自主决策 — 不需要向用户请示。
 7. 用中文交流。
 8. 按照 bug.md 的顺序解决 bug。
