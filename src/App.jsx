@@ -4,10 +4,7 @@ import SessionList from './components/SessionList';
 import QRCodeModal from './components/QRCodeModal';
 import './App.css';
 
-const VIEWS = {
-  ISLAND: 'island',
-  SESSIONS: 'sessions',
-};
+const VIEWS = { ISLAND: 'island', SESSIONS: 'sessions' };
 
 export default function App() {
   const [view, setView] = useState(VIEWS.ISLAND);
@@ -21,8 +18,12 @@ export default function App() {
     const hash = window.location.hash.replace('#/', '');
     if (hash === 'sessions') {
       setView(VIEWS.SESSIONS);
+      // Session list window must NOT be draggable so clicks work
+      document.body.style.setProperty('-webkit-app-region', 'no-drag');
     } else {
       setView(VIEWS.ISLAND);
+      // Island window IS draggable
+      document.body.style.setProperty('-webkit-app-region', 'drag');
     }
   }, []);
 
@@ -30,25 +31,27 @@ export default function App() {
   useEffect(() => {
     if (!window.ccIsland) return;
 
-    window.ccIsland.onSessionsUpdated((updatedSessions) => {
+    const unsub1 = window.ccIsland.onSessionsUpdated((updatedSessions) => {
       setSessions(updatedSessions || []);
     });
 
-    window.ccIsland.onWechatStatus((status) => {
+    const unsub2 = window.ccIsland.onWechatStatus((status) => {
       setWechatStatus(status);
     });
 
-    window.ccIsland.onIslandExpand(() => {
+    const unsub3 = window.ccIsland.onIslandExpand(() => {
       setIsExpanded(true);
     });
 
-    window.ccIsland.onIslandCollapse(() => {
+    const unsub4 = window.ccIsland.onIslandCollapse(() => {
       setIsExpanded(false);
     });
 
     // Initial load
     window.ccIsland.getSessions().then(setSessions);
     window.ccIsland.getWechatStatus().then(setWechatStatus);
+
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   const handleIslandClick = useCallback(() => {
@@ -66,9 +69,7 @@ export default function App() {
   }, []);
 
   const handleSendMessage = useCallback(async (sessionId, message) => {
-    if (window.ccIsland) {
-      return window.ccIsland.sendToSession(sessionId, message);
-    }
+    if (window.ccIsland) return window.ccIsland.sendToSession(sessionId, message);
     return false;
   }, []);
 
@@ -94,10 +95,7 @@ export default function App() {
         onSendMessage={handleSendMessage}
       />
       {qrSession && (
-        <QRCodeModal
-          session={qrSession}
-          onClose={handleCloseQR}
-        />
+        <QRCodeModal session={qrSession} onClose={handleCloseQR} />
       )}
     </div>
   );

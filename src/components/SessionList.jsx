@@ -117,16 +117,11 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
 
       <style>{`
         .session-list {
-          width: 100%;
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          background: var(--bg-primary);
-          border-radius: var(--radius-lg);
-          border: 1px solid var(--border-subtle);
-          overflow: hidden;
-          backdrop-filter: blur(20px);
-          -webkit-backdrop-filter: blur(20px);
+          width: 100%; height: 100%; display: flex; flex-direction: column;
+          background: var(--bg-primary); border-radius: var(--radius-lg);
+          border: 1px solid var(--border-subtle); overflow: hidden;
+          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+          -webkit-app-region: no-drag;
         }
 
         .list-header {
@@ -179,14 +174,11 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         }
 
         .search-box {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 7px 10px;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-sm);
+          display: flex; align-items: center; gap: 8px;
+          padding: 7px 10px; background: rgba(255,255,255,0.04);
+          border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
           margin-bottom: 10px;
+          -webkit-app-region: no-drag;
         }
 
         .search-icon {

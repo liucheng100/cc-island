@@ -3,6 +3,7 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 class SessionMonitor extends EventEmitter {
   constructor() {
@@ -10,7 +11,6 @@ class SessionMonitor extends EventEmitter {
     this.sessions = new Map();
     this.pollInterval = null;
     this.POLL_MS = 5000;
-    this.noSessionCount = 0;
   }
 
   start() {
@@ -19,45 +19,54 @@ class SessionMonitor extends EventEmitter {
   }
 
   stop() {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
+    if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
+  }
+
+  // Generate a stable session key from working directory + process signature
+  // This prevents duplicate sessions from subprocesses sharing the same CWD
+  makeSessionKey(pid, cwd) {
+    // Use CWD as primary key — one Claude Code session = one working directory
+    const normalized = cwd.replace(/\\/g, '/').toLowerCase();
+    return `claude-${crypto.createHash('md5').update(normalized).digest('hex').substring(0, 8)}`;
   }
 
   async scanSessions() {
     try {
-      const tasks = await this.findClaudeProcesses();
-      const currentIds = new Set();
+      const processes = await this.findClaudeProcesses();
+      const currentKeys = new Set();
 
-      for (const task of tasks) {
-        currentIds.add(task.id);
+      for (const proc of processes) {
+        const key = this.makeSessionKey(proc.pid, proc.cwd);
+        currentKeys.add(key);
 
-        if (!this.sessions.has(task.id)) {
+        if (!this.sessions.has(key)) {
           const session = {
-            ...task,
+            ...proc,
+            id: key,
             status: 'working',
             startTime: new Date().toISOString(),
             messages: [],
             lastActivity: new Date().toISOString(),
             workingDuration: 0,
           };
-          this.sessions.set(task.id, session);
-          console.log(`[SessionMonitor] New session: ${task.name} (${task.id})`);
+          this.sessions.set(key, session);
+          console.log(`[SessionMonitor] New: ${proc.name} (${key})`);
         } else {
-          const existing = this.sessions.get(task.id);
+          const existing = this.sessions.get(key);
+          existing.pid = proc.pid; // update PID in case process restarted
+          existing.commandLine = proc.commandLine;
           existing.lastActivity = new Date().toISOString();
 
-          const isDone = await this.checkCompletion(task);
-          if (isDone && existing.status === 'working' && task.pid > 0) {
+          const isDone = await this.checkCompletion(proc);
+          if (isDone && existing.status === 'working' && proc.pid > 0) {
             existing.status = 'completed';
             existing.completedTime = new Date().toISOString();
-            console.log(`[SessionMonitor] Session completed: ${task.name}`);
+            console.log(`[SessionMonitor] Done: ${proc.name}`);
           } else if (!isDone && existing.status === 'completed') {
             existing.status = 'working';
           }
 
-          const messages = await this.readConversation(task);
+          const messages = await this.readConversation(proc);
           if (messages.length > 0) {
             existing.messages = messages;
           }
@@ -68,22 +77,18 @@ class SessionMonitor extends EventEmitter {
         }
       }
 
-      // Mark dead sessions
-      for (const [id, session] of this.sessions) {
-        if (!currentIds.has(id)) {
+      // Mark sessions no longer seen
+      for (const [key, session] of this.sessions) {
+        if (!currentKeys.has(key)) {
           session.status = 'disconnected';
         }
       }
 
-      // Clean up old disconnected sessions after 5 minutes
+      // Clean stale disconnected after 5 minutes
       const now = Date.now();
-      for (const [id, session] of this.sessions) {
-        if (
-          session.status === 'disconnected' &&
-          now - new Date(session.lastActivity).getTime() > 300000
-        ) {
-          this.sessions.delete(id);
-          console.log(`[SessionMonitor] Removed stale session: ${id}`);
+      for (const [key, session] of this.sessions) {
+        if (session.status === 'disconnected' && now - new Date(session.lastActivity).getTime() > 300000) {
+          this.sessions.delete(key);
         }
       }
 
@@ -95,18 +100,19 @@ class SessionMonitor extends EventEmitter {
 
   async findClaudeProcesses() {
     return new Promise((resolve) => {
-      // PowerShell-based detection: more accurate on modern Windows
-      const psCmd = `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'claude' -or $_.CommandLine -match 'claude-code' -or $_.CommandLine -match 'anthropic' -or $_.Name -match 'claude' } | Select-Object ProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
+      // Use PowerShell to find genuine Claude Code processes
+      // Claude Code CLI: command line contains "@anthropic-ai/claude-code" or runs "claude" binary
+      // Claude Code Desktop: process name is "Claude" or "Claude Code"
+      const psCmd = `powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process; $results = @(); foreach ($p in $procs) { $cl = if($p.CommandLine) { $p.CommandLine } else { '' }; $nm = if($p.Name) { $p.Name } else { '' }; if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code' -or $cl -match '\\\\\\\\claude\\\\b' -or $nm -match '^claude$' -or $nm -match '^Claude' -or $nm -match 'Claude Code') { $results += $p } }; $results | Select-Object ProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
 
-      exec(psCmd, { timeout: 8000 }, (err, stdout) => {
+      exec(psCmd, { timeout: 10000 }, (err, stdout) => {
         if (err || !stdout || stdout.trim().length === 0) {
-          // Fallback: try WMIC
           this.findClaudeProcessesWMIC().then(resolve);
           return;
         }
 
         const tasks = [];
-        const lines = stdout.trim().split('\n').slice(1); // skip header
+        const lines = stdout.trim().split('\n').slice(1);
 
         for (const line of lines) {
           const parts = line.replace(/^"|"$/g, '').split('","');
@@ -120,19 +126,18 @@ class SessionMonitor extends EventEmitter {
 
           // Skip our own process
           if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island')) continue;
-          // Skip electron itself
           if (cmdLine.includes('electron') && !cmdLine.includes('claude')) continue;
+          // Skip this very PowerShell command
+          if (cmdLine.includes('Get-CimInstance')) continue;
 
-          const cwd = this.extractCwd(cmdLine);
+          const cwd = await this.extractCwd(pid, cmdLine);
           const sessionName = this.extractSessionName(cmdLine, cwd, name);
 
           tasks.push({
-            id: `session-${pid}`,
             pid: parseInt(pid),
             name: sessionName,
             cwd: cwd,
             commandLine: cmdLine.substring(0, 500),
-            type: 'claude-code',
           });
         }
 
@@ -141,14 +146,53 @@ class SessionMonitor extends EventEmitter {
     });
   }
 
+  async extractCwd(pid, cmdLine) {
+    // Method 1: Parse from command line
+    const cwdMatch = cmdLine.match(/(?:--cwd|--dir)\s+["']?([^"'\s]+)/i);
+    if (cwdMatch && fs.existsSync(cwdMatch[1])) return cwdMatch[1];
+
+    // Method 2: Query process working directory via PowerShell
+    try {
+      const cwd = await this.queryProcessCwd(pid);
+      if (cwd && fs.existsSync(cwd)) return cwd;
+    } catch (e) { /* ignore */ }
+
+    // Method 3: Extract Windows path from command line
+    const pathMatch = cmdLine.match(/([A-Z]:\\[^"'\s]+)/i);
+    if (pathMatch) {
+      const candidate = pathMatch[1];
+      if (fs.existsSync(candidate)) return candidate;
+      // Try parent directory
+      const parent = path.dirname(candidate);
+      if (fs.existsSync(parent)) return parent;
+    }
+
+    return os.homedir();
+  }
+
+  async queryProcessCwd(pid) {
+    return new Promise((resolve, reject) => {
+      const cmd = `wmic process where ProcessId=${pid} get ExecutablePath /format:csv 2>nul`;
+      exec(cmd, { timeout: 3000 }, (err, stdout) => {
+        if (err || !stdout) { reject(err); return; }
+        const lines = stdout.trim().split('\n');
+        if (lines.length < 2) { reject(new Error('no data')); return; }
+        const exePath = lines[1].split(',').pop().replace(/"/g, '').trim();
+        if (exePath) {
+          resolve(path.dirname(exePath));
+        } else {
+          reject(new Error('no path'));
+        }
+      });
+    });
+  }
+
   async findClaudeProcessesWMIC() {
     return new Promise((resolve) => {
-      const cmd = `wmic process where "name like '%node%' or name like '%claude%' or name like '%cmd%'" get ProcessId,Name,CommandLine /format:csv 2>nul`;
-      exec(cmd, { timeout: 5000 }, (err, stdout) => {
-        if (err || !stdout) {
-          resolve([]);
-          return;
-        }
+      // Narrower WMIC query — only look for processes likely to be Claude
+      const cmd = `wmic process where "name='node.exe' or name='claude.exe' or name='Claude.exe' or name like 'Claude%'" get ProcessId,Name,CommandLine /format:csv 2>nul`;
+      exec(cmd, { timeout: 5000 }, async (err, stdout) => {
+        if (err || !stdout) { resolve([]); return; }
 
         const tasks = [];
         const lines = stdout.split('\n').filter((l) => l.trim());
@@ -163,30 +207,25 @@ class SessionMonitor extends EventEmitter {
 
           if (!pid || isNaN(parseInt(pid))) continue;
 
-          // Detect Claude Code via various signatures
+          // Strict detection: only real Claude processes
           const isClaude =
-            cmdLine.includes('claude') ||
-            cmdLine.includes('@anthropic') ||
+            cmdLine.includes('@anthropic-ai/claude-code') ||
             cmdLine.includes('claude-code') ||
-            cmdLine.includes('claude_cli') ||
-            (cmdLine.includes('node') && cmdLine.includes('anthropic')) ||
-            name.toLowerCase().includes('claude');
+            cmdLine.includes('\\claude ') ||
+            (name.toLowerCase().includes('claude') && !cmdLine.includes('cc-island') && !cmdLine.includes('CC Island'));
 
           if (!isClaude) continue;
-
-          // Skip self
           if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island')) continue;
+          if (cmdLine.includes('Select-Object') || cmdLine.includes('Get-CimInstance')) continue;
 
-          const cwd = this.extractCwd(cmdLine);
+          const cwd = await this.extractCwd(pid, cmdLine);
           const sessionName = this.extractSessionName(cmdLine, cwd, name);
 
           tasks.push({
-            id: `session-${pid}`,
             pid: parseInt(pid),
             name: sessionName,
             cwd: cwd,
             commandLine: cmdLine.substring(0, 500),
-            type: 'claude-code',
           });
         }
 
@@ -195,39 +234,20 @@ class SessionMonitor extends EventEmitter {
     });
   }
 
-  extractCwd(cmdLine) {
-    // Claude Code often has the working directory in the command
-    const cwdMatch = cmdLine.match(/(?:--cwd|--dir|cd)\s+["']?([^"'\s]+)/i);
-    if (cwdMatch && fs.existsSync(cwdMatch[1])) {
-      return cwdMatch[1];
-    }
-    // Try to find by Claude's project marker
-    const projectMatch = cmdLine.match(/["']?([A-Z]:[\\\/][^"'\s]+)["']?/);
-    if (projectMatch && fs.existsSync(projectMatch[1])) {
-      return projectMatch[1];
-    }
-    return os.homedir();
-  }
-
   extractSessionName(cmdLine, cwd, processName) {
     const promptMatch = cmdLine.match(/--prompt\s+["']?([^"']+)/);
-    if (promptMatch) {
-      return promptMatch[1].substring(0, 50);
-    }
+    if (promptMatch) return promptMatch[1].substring(0, 50);
+
+    // Use working directory name as session name
     const dirName = path.basename(cwd);
-    return `${dirName}`;
+    return dirName;
   }
 
   async checkCompletion(task) {
     if (task.pid === 0) return false;
-
     return new Promise((resolve) => {
       exec(`tasklist /FI "PID eq ${task.pid}" /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
-        if (err) {
-          resolve(true);
-          return;
-        }
-        // Process exists = still working
+        if (err) { resolve(true); return; }
         resolve(!stdout.includes(`${task.pid}`));
       });
     });
@@ -237,28 +257,27 @@ class SessionMonitor extends EventEmitter {
     const claudeDir = path.join(os.homedir(), '.claude');
     const possiblePaths = [];
 
-    // Claude Code stores conversations in various locations
     if (fs.existsSync(claudeDir)) {
       try {
         const entries = fs.readdirSync(claudeDir);
         for (const entry of entries) {
           const full = path.join(claudeDir, entry);
-          if (fs.statSync(full).isDirectory() && entry !== 'plugins' && entry !== 'node_modules') {
-            const convDir = path.join(full, 'conversations');
-            if (fs.existsSync(convDir)) possiblePaths.push(convDir);
-          }
+          try {
+            if (fs.statSync(full).isDirectory() && entry !== 'plugins' && entry !== 'node_modules') {
+              const convDir = path.join(full, 'conversations');
+              if (fs.existsSync(convDir)) possiblePaths.push(convDir);
+            }
+          } catch (e) { /* ignore */ }
           if (entry.endsWith('.jsonl')) possiblePaths.push(full);
           if (entry === 'history.jsonl') possiblePaths.push(full);
         }
       } catch (e) { /* ignore */ }
     }
 
-    // Also check project-local .claude
+    // Check project-local .claude
     if (task.cwd) {
       const localClaude = path.join(task.cwd, '.claude');
-      if (fs.existsSync(localClaude)) {
-        possiblePaths.push(localClaude);
-      }
+      if (fs.existsSync(localClaude)) possiblePaths.push(localClaude);
     }
 
     for (const logPath of possiblePaths) {
@@ -305,7 +324,7 @@ class SessionMonitor extends EventEmitter {
                 timestamp: entry.timestamp || entry.created_at || new Date().toISOString(),
               });
             }
-          } catch (e) { /* skip malformed lines */ }
+          } catch (e) { /* skip */ }
         }
       } else {
         const data = JSON.parse(content);
