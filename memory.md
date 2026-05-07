@@ -65,3 +65,22 @@ npm run electron:build  # electron-builder@25.1.8
 ### 蜂鸣通知
 - 使用 Web Audio API 生成音调，无需外部音频文件
 - 必须在首次 mousedown 时 resume AudioContext
+
+### 7. setBounds 替代 setPosition 防窗口大小变化
+- `win.setPosition(x, y)` 在 Electron 中可能触发 resize，导致窗口大小抖动
+- 应使用 `win.setBounds({ x, y, width: w, height: h })` 保持尺寸不变
+
+### 8. Windows 进程 MainWindowHandle 可能为 0
+- 控制台程序 (cmd.exe, node.exe) 的 MainWindowHandle 常为零
+- 需通过父进程或子进程窗口树查找可聚焦的窗口
+- SendKeys 是模拟键盘输入的最可靠方式
+
+### 9. 公网隧道应多服务 fallback
+- serveo.net 在中国大陆访问不稳定
+- 按优先级依次尝试: bore.pub (HTTP), localhost.run (SSH), serveo.net (SSH)
+- SSH 连接设置超时 (ConnectTimeout=10) 防卡死
+
+### 10. iLink Bot API 是微信官方合法通道
+- 2026年3月腾讯开放 `ilinkai.weixin.qq.com` 个人号 Bot API
+- 支持 WebSocket 长连接 + HTTP 轮询双模式
+- 替代之前的逆向/Hook灰色方案

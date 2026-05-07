@@ -125,8 +125,117 @@ class LocalServer extends EventEmitter {
   }
 
   // ========================
-  // Public Tunnel (serveo.net / localhost.run)
+  // Public Tunnel — tries multiple services
   // ========================
+
+  async startTunnel(service = 'auto') {
+    if (this.tunnelProcess) { this.stopTunnel(); }
+
+    // Try services in order: bore.pub (HTTP), localhost.run (SSH), serveo.net (SSH)
+    const services = service === 'auto'
+      ? ['bore', 'localhost.run', 'serveo']
+      : [service];
+
+    for (const svc of services) {
+      const result = await this.tryTunnel(svc);
+      if (result && result.active) return result;
+    }
+
+    this.tunnelStatus = { active: false, url: null, service: null, error: 'All services failed' };
+    return this.tunnelStatus;
+  }
+
+  async tryTunnel(service) {
+    if (service === 'bore') {
+      return this.tryBoreTunnel();
+    }
+    return this.trySSHTunnel(service);
+  }
+
+  // bore.pub — free HTTP tunnel, no SSH needed
+  async tryBoreTunnel() {
+    return new Promise((resolve) => {
+      console.log('[Tunnel] Trying bore.pub...');
+      // bore is a Rust-based tunnel tool, check if installed
+      const { exec } = require('child_process');
+      exec('bore local ' + this.port + ' --to bore.pub 2>&1', { timeout: 10000 }, (err, stdout) => {
+        if (err) { resolve(null); return; }
+        const match = stdout.match(/bore\.pub:(\d+)/) || stdout.match(/([\w-]+\.bore\.pub)/);
+        if (match) {
+          const url = `http://bore.pub:${match[1]}`;
+          this.publicURL = url;
+          this.tunnelStatus = { active: true, url, service: 'bore.pub' };
+          resolve(this.tunnelStatus);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  // SSH-based tunnels
+  async trySSHTunnel(service) {
+    return new Promise((resolve) => {
+      const hosts = {
+        'localhost.run': { host: 'nokey@localhost.run', port: 80 },
+        'serveo': { host: 'serveo.net', port: 80 },
+      };
+
+      const cfg = hosts[service];
+      if (!cfg) { resolve(null); return; }
+
+      console.log(`[Tunnel] Trying ${service}...`);
+      this.tunnelProcess = spawn('ssh', [
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'UserKnownHostsFile=/dev/null',
+        '-o', 'ConnectTimeout=10',
+        '-o', 'ServerAliveInterval=30',
+        '-R', `${cfg.port}:localhost:${this.port}`,
+        cfg.host,
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let resolved = false;
+      const handle = setTimeout(() => {
+        if (!resolved) { resolved = true; resolve(null); }
+      }, 12000);
+
+      const onData = (data) => {
+        const output = data.toString();
+        console.log('[Tunnel]', output.trim());
+        // Match serveo.net URL
+        const serveoMatch = output.match(/https?:\/\/([\w-]+\.serveo\.net)/);
+        // Match localhost.run URL
+        const lhrMatch = output.match(/https?:\/\/([\w-]+\.lhr\.life)/);
+
+        if ((serveoMatch || lhrMatch) && !resolved) {
+          const url = serveoMatch ? `https://${serveoMatch[1]}` : `https://${lhrMatch[1]}`;
+          this.publicURL = url;
+          this.tunnelStatus = { active: true, url, service };
+          resolved = true;
+          clearTimeout(handle);
+          console.log(`[Tunnel] Public URL: ${url}`);
+          resolve(this.tunnelStatus);
+        }
+      };
+
+      this.tunnelProcess.stdout.on('data', onData);
+      this.tunnelProcess.stderr.on('data', onData);
+
+      this.tunnelProcess.on('close', () => {
+        if (!resolved) { resolved = true; clearTimeout(handle); resolve(null); }
+        this.tunnelProcess = null;
+        if (this.publicURL && this.tunnelStatus.active) {
+          // Connection was established but later dropped
+          this.tunnelStatus = { active: false, url: null, service: null };
+        }
+      });
+
+      this.tunnelProcess.on('error', () => {
+        if (!resolved) { resolved = true; clearTimeout(handle); resolve(null); }
+        this.tunnelProcess = null;
+      });
+    });
+  }
 
   async startTunnel(service = 'serveo') {
     if (this.tunnelProcess) {

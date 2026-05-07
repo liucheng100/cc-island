@@ -100,12 +100,13 @@ function setupIPC() {
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
   ipcMain.handle('focus-session-window', (_, id) => sessionMonitor ? sessionMonitor.focusSessionWindow(id) : false);
 
-  // Pure JS window drag
+  // Pure JS window drag — use setBounds to keep size stable
   ipcMain.on('move-window', (event, dx, dy) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win) {
       const [x, y] = win.getPosition();
-      win.setPosition(x + dx, y + dy);
+      const [w, h] = win.getSize();
+      win.setBounds({ x: x + dx, y: y + dy, width: w, height: h });
     }
   });
 }

@@ -84,3 +84,5 @@ Python (python/wechat_bridge.py)
 4. `bug.md` is the user's scratchpad — do NOT reformat, restructure, or modify format. Only read bugs from it.
 5. Play completion sound via Web Audio API after finishing tasks.
 6. Make all decisions autonomously — do not ask the user for approval.
+7. 用中文
+8. 按照bug.md的顺序解决

@@ -359,15 +359,37 @@ class SessionMonitor extends EventEmitter {
     return { ...session, messages: session.messages || [] };
   }
 
-  // Focus the actual CMD/console window for this session
+  // Focus the CMD/console window for this session
   async focusSessionWindow(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session || !session.pid) return false;
     try {
-      // Use PowerShell to find and focus the console window for the process
-      const psScript = `powershell -NoProfile -Command "$pid=${session.pid}; Add-Type -Name WinAPI -Namespace Temp -MemberDefinition '[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetForegroundWindow();'; $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue; if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) { [Temp.WinAPI]::ShowWindow($proc.MainWindowHandle, 9); [Temp.WinAPI]::SetForegroundWindow($proc.MainWindowHandle) }"`;
+      // Use PowerShell to find child console windows of the process
+      const psScript = `powershell -NoProfile -Command "
+$parentId = ${session.pid};
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public class WinFocus {
+[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+[DllImport(\\\"user32.dll\\\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+}
+'@
+$ps = Get-Process -Id $parentId -ErrorAction SilentlyContinue;
+if ($ps) {
+  if ($ps.MainWindowHandle -ne [IntPtr]::Zero) {
+    [WinFocus]::ShowWindow($ps.MainWindowHandle, 5);
+    [WinFocus]::SetForegroundWindow($ps.MainWindowHandle);
+  }
+}
+# Also try to activate console via cmd
+& cmd /c 'start /min' 2>\$null
+\""`;
       const { exec } = require('child_process');
-      exec(psScript, { timeout: 5000 }, () => {});
+      exec(psScript, { timeout: 5000 }, (err) => {
+        if (err) console.error('[SessionMonitor] Focus failed:', err.message);
+      });
       return true;
     } catch (e) {
       return false;
@@ -378,13 +400,40 @@ class SessionMonitor extends EventEmitter {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
+    // Store message locally
     if (!session.messages) session.messages = [];
     session.messages.push({
-      role: 'user',
-      content: message,
-      timestamp: new Date().toISOString(),
+      role: 'user', content: message, timestamp: new Date().toISOString(),
     });
     session.lastActivity = new Date().toISOString();
+
+    // Try to actually send keystrokes to the Claude CMD window
+    try {
+      const psScript = `powershell -NoProfile -Command "
+Add-Type -AssemblyName System.Windows.Forms;
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public class WinKey {
+[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+'@
+$ps = Get-Process -Id ${session.pid} -ErrorAction SilentlyContinue;
+if (\$ps -and \$ps.MainWindowHandle -ne [IntPtr]::Zero) {
+  [WinKey]::ShowWindow(\$ps.MainWindowHandle, 5);
+  [WinKey]::SetForegroundWindow(\$ps.MainWindowHandle);
+  Start-Sleep -Milliseconds 100;
+  [System.Windows.Forms.SendKeys]::SendWait('${message.replace(/'/g, "''").replace(/[+^%~(){}[\]]/g, '{\\$&}')}');
+}
+\""`;
+      const { exec } = require('child_process');
+      exec(psScript, { timeout: 5000 }, (err) => {
+        if (err) console.error('[SessionMonitor] SendKeys failed:', err.message);
+      });
+    } catch (e) {
+      console.error('[SessionMonitor] Send failed:', e.message);
+    }
+
     this.emit('sessions-updated', this.getSessions());
     return true;
   }
