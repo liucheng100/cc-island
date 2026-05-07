@@ -11,6 +11,7 @@ class SessionMonitor extends EventEmitter {
     this.sessions = new Map();
     this.pollInterval = null;
     this.POLL_MS = 5000;
+    this.processInfoCache = new Map();
   }
 
   start() {
@@ -32,6 +33,7 @@ class SessionMonitor extends EventEmitter {
 
   async scanSessions() {
     try {
+      this.processInfoCache.clear();
       const processes = await this.findClaudeProcesses();
       const currentKeys = new Set();
 
@@ -219,23 +221,37 @@ class SessionMonitor extends EventEmitter {
   }
 
   async getProcessInfo(pid) {
+    const cached = this.processInfoCache.get(pid);
+    if (cached && Date.now() - cached.ts < 30000) return cached.info;
+
     return new Promise((resolve) => {
-      const ps = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object Name,ParentProcessId,CommandLine | ConvertTo-Json"`;
+      const ps = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object Name,ParentProcessId | ConvertTo-Csv -NoTypeInformation"`;
       exec(ps, { timeout: 5000 }, (err, stdout) => {
-        if (err || !stdout || !stdout.trim()) { resolve(null); return; }
+        if (err || !stdout || !stdout.trim()) {
+          this.processInfoCache.set(pid, { info: null, ts: Date.now() });
+          resolve(null);
+          return;
+        }
         try {
-          const obj = JSON.parse(stdout.trim());
-          resolve({
-            Name: (obj.Name || '').trim(),
-            ParentProcessId: parseInt(obj.ParentProcessId) || 0,
-            CommandLine: (obj.CommandLine || '').trim(),
-          });
-        } catch (e) { resolve(null); }
+          const lines = stdout.trim().split('\n').slice(1);
+          if (lines.length === 0) { this.processInfoCache.set(pid, { info: null, ts: Date.now() }); resolve(null); return; }
+          const parts = lines[0].replace(/"/g, '').split(',');
+          const info = {
+            Name: (parts[0] || '').trim(),
+            ParentProcessId: parseInt(parts[1]) || 0,
+          };
+          this.processInfoCache.set(pid, { info, ts: Date.now() });
+          resolve(info);
+        } catch (e) {
+          this.processInfoCache.set(pid, { info: null, ts: Date.now() });
+          resolve(null);
+        }
       });
     });
   }
 
   async getCwdFromWindow(processName, cmdLine) {
+    if (!cmdLine) return null;
     // Try to extract CWD from CMD /K or /C patterns
     const cdMatch = cmdLine.match(/cd\s+["']?([^"'&|]+)/i);
     if (cdMatch && fs.existsSync(cdMatch[1].trim())) return cdMatch[1].trim();
