@@ -10,7 +10,7 @@ class SessionMonitor extends EventEmitter {
     super();
     this.sessions = new Map();
     this.pollInterval = null;
-    this.POLL_MS = 5000;
+    this.POLL_MS = 2000;
     this.processInfoCache = new Map();
   }
 
@@ -25,9 +25,12 @@ class SessionMonitor extends EventEmitter {
 
   // Generate a stable session key from working directory + process signature
   // This prevents duplicate sessions from subprocesses sharing the same CWD
-  makeSessionKey(pid, cwd) {
+  makeSessionKey(pid, cwd, terminalPid) {
     // Use CWD as primary key — one Claude Code session = one working directory
-    const normalized = cwd.replace(/\\/g, '/').toLowerCase();
+    // If CWD is homedir (unreliable), use terminalPid to distinguish sessions
+    const isGenericCwd = !cwd || cwd === os.homedir() || cwd === 'C:\\' || cwd === '/';
+    const keySource = isGenericCwd ? `terminal-${terminalPid || pid}` : cwd;
+    const normalized = keySource.replace(/\\/g, '/').toLowerCase();
     return `claude-${crypto.createHash('md5').update(normalized).digest('hex').substring(0, 8)}`;
   }
 
@@ -38,7 +41,7 @@ class SessionMonitor extends EventEmitter {
       const currentKeys = new Set();
 
       for (const proc of processes) {
-        const key = this.makeSessionKey(proc.pid, proc.cwd);
+        const key = this.makeSessionKey(proc.pid, proc.cwd, proc.terminalPid);
         currentKeys.add(key);
 
         if (!this.sessions.has(key)) {
@@ -165,14 +168,10 @@ class SessionMonitor extends EventEmitter {
       if (!info) break;
       const name = (info.Name || '').toLowerCase();
       chain.push(`${name}(${currentPid})`);
-      if (terminalNames.has(name)) {
-        console.log(`[SessionMonitor] Terminal for pid=${pid}: ${chain.join(' -> ')}`);
-        return currentPid;
-      }
+      if (terminalNames.has(name)) return currentPid;
       if (!info.ParentProcessId || info.ParentProcessId === 0) break;
       currentPid = info.ParentProcessId;
     }
-    console.log(`[SessionMonitor] No terminal found for pid=${pid}: ${chain.join(' -> ')}`);
     return parentPid || pid;
   }
 
@@ -203,21 +202,65 @@ class SessionMonitor extends EventEmitter {
   }
 
   async queryProcessCwdViaParent(pid) {
-    // Walk up parent chain to find CMD/PowerShell/Windows Terminal, then get its CWD
     let currentPid = pid;
     for (let i = 0; i < 10; i++) {
       const info = await this.getProcessInfo(currentPid);
       if (!info) break;
       const name = (info.Name || '').toLowerCase();
       if (name === 'cmd.exe' || name === 'powershell.exe' || name === 'pwsh.exe' || name === 'windowsterminal.exe') {
-        // Try to get CWD from /proc-style or working directory
-        const cwd = await this.getCwdFromWindow(info.Name, info.CommandLine);
+        const cwd = await this.getCwdFromWindowTitle(currentPid);
         if (cwd) return cwd;
       }
       if (!info.ParentProcessId || info.ParentProcessId === 0) break;
       currentPid = info.ParentProcessId;
     }
     return null;
+  }
+
+  async getCwdFromWindowTitle(pid) {
+    return new Promise((resolve) => {
+      const ps = `powershell -NoProfile -Command "
+Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class WinTitle {
+  [DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)]
+  public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+  [DllImport(\"user32.dll\", SetLastError=true)]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport(\"user32.dll\")]
+  public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+}
+'@
+\$targetPid = ${pid}
+\$title = ''
+\$cb = [WinTitle+EnumWindowsProc]{ param([IntPtr]\$hWnd, [IntPtr]\$lParam)
+  \$wpid = 0
+  [void][WinTitle]::GetWindowThreadProcessId(\$hWnd, [ref]\$wpid)
+  if (\$wpid -eq \$targetPid) {
+    \$sb = New-Object Text.StringBuilder 512
+    [void][WinTitle]::GetWindowText(\$hWnd, \$sb, 512)
+    \$t = \$sb.ToString()
+    if (\$t -and \$t.Length -gt 2) { \$script:title = \$t; return \$false }
+  }
+  return \$true
+}
+[void][WinTitle]::EnumWindows(\$cb, [IntPtr]::Zero)
+if (\$script:title) { Write-Output \$script:title }
+"`;
+      exec(ps, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) { resolve(null); return; }
+        const title = stdout.trim();
+        const pathMatch = title.match(/([A-Z]:\[^:*?"<>|]+)/i);
+        if (pathMatch && fs.existsSync(pathMatch[1])) {
+          resolve(pathMatch[1]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
   }
 
   async getProcessInfo(pid) {
@@ -248,17 +291,6 @@ class SessionMonitor extends EventEmitter {
         }
       });
     });
-  }
-
-  async getCwdFromWindow(processName, cmdLine) {
-    if (!cmdLine) return null;
-    // Try to extract CWD from CMD /K or /C patterns
-    const cdMatch = cmdLine.match(/cd\s+["']?([^"'&|]+)/i);
-    if (cdMatch && fs.existsSync(cdMatch[1].trim())) return cdMatch[1].trim();
-    // Try pushd
-    const pushdMatch = cmdLine.match(/pushd\s+["']?([^"'&|]+)/i);
-    if (pushdMatch && fs.existsSync(pushdMatch[1].trim())) return pushdMatch[1].trim();
-    return null;
   }
 
   async findClaudeProcessesWMIC() {
@@ -322,11 +354,13 @@ class SessionMonitor extends EventEmitter {
   }
 
   async checkCompletion(task) {
-    if (task.pid === 0) return false;
+    // Check if the terminal process is still alive (not the Claude PID, which may restart)
+    const checkPid = task.terminalPid || task.parentPid || task.pid;
+    if (checkPid === 0) return false;
     return new Promise((resolve) => {
-      exec(`tasklist /FI "PID eq ${task.pid}" /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
+      exec(`tasklist /FI "PID eq ${checkPid}" /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
         if (err) { resolve(true); return; }
-        resolve(!stdout.includes(`${task.pid}`));
+        resolve(!stdout.includes(`${checkPid}`));
       });
     });
   }
