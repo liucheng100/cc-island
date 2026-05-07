@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('ccIsland', {
   stopWechatBridge: () => ipcRenderer.invoke('stop-wechat-bridge'),
 
   getQRCodeUrl: (sessionId) => ipcRenderer.invoke('get-qrcode-url', sessionId),
+  getServerInfo: () => ipcRenderer.invoke('get-server-info'),
   getTunnelStatus: () => ipcRenderer.invoke('get-tunnel-status'),
   startTunnel: () => ipcRenderer.invoke('start-tunnel'),
   stopTunnel: () => ipcRenderer.invoke('stop-tunnel'),

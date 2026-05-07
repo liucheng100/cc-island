@@ -103,6 +103,10 @@ function setupIPC() {
   ipcMain.handle('get-tunnel-status', () => localServer ? localServer.getTunnelStatus() : null);
   ipcMain.handle('start-tunnel', () => localServer ? localServer.startTunnel() : false);
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
+  ipcMain.handle('get-server-info', () => {
+    if (!localServer) return { port: 0, localIP: '127.0.0.1', publicURL: null };
+    return { port: localServer.getPort(), localIP: localServer.getLocalIP(), publicURL: localServer.getPublicURL() };
+  });
   ipcMain.handle('focus-session-window', async (_, id) => {
     if (!sessionMonitor) return false;
     if (islandWindow && !islandWindow.isDestroyed()) islandWindow.setAlwaysOnTop(false);

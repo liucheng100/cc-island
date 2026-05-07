@@ -11,7 +11,12 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   const [filter, setFilter] = useState('all');
   const [searchText, setSearchText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const [serverInfo, setServerInfo] = useState({ port: 0, localIP: '127.0.0.1', publicURL: null });
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
+
+  useEffect(() => {
+    if (window.ccIsland) window.ccIsland.getServerInfo().then(setServerInfo);
+  }, []);
 
   // JS-based drag for the session list window via header
   const handleHeaderDown = useCallback((e) => {
@@ -71,6 +76,9 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         <div className="list-header-top" onMouseDown={handleHeaderDown} style={{ cursor: 'grab' }}>
           <h2 className="list-title">Claude Code 灵动岛</h2>
           <div className="header-actions">
+            <div className="server-info-badge" title={`${serverInfo.localIP}:${serverInfo.port}`}>
+              <span className="server-port">:{serverInfo.port}</span>
+            </div>
             <div className={`wechat-status-badge ${wechatStatus.connected ? 'connected' : ''}`}>
               <span className="wechat-dot" />
               <span className="wechat-text">
@@ -172,6 +180,23 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           font-weight: 700;
           color: var(--text-primary);
           letter-spacing: 0.5px;
+        }
+
+        .server-info-badge {
+          display: flex;
+          align-items: center;
+          padding: 4px 8px;
+          border-radius: 12px;
+          background: rgba(255,255,255,0.04);
+          border: 1px solid var(--border-subtle);
+          font-size: 10px;
+          color: var(--text-muted);
+          font-family: monospace;
+          cursor: default;
+        }
+
+        .server-port {
+          font-weight: 600;
         }
 
         .wechat-status-badge {
