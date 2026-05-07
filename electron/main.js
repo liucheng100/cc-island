@@ -105,12 +105,16 @@ function setupIPC() {
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
   ipcMain.handle('focus-session-window', async (_, id) => {
     if (!sessionMonitor) return false;
-    if (sessionListWindow && !sessionListWindow.isDestroyed()) sessionListWindow.hide();
     if (islandWindow && !islandWindow.isDestroyed()) islandWindow.setAlwaysOnTop(false);
+    if (sessionListWindow && !sessionListWindow.isDestroyed()) sessionListWindow.setAlwaysOnTop(false);
     const ok = await sessionMonitor.focusSessionWindow(id);
     setTimeout(() => {
       if (islandWindow && !islandWindow.isDestroyed()) islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-    }, 1500);
+      if (sessionListWindow && !sessionListWindow.isDestroyed() && isIslandExpanded) {
+        sessionListWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+        if (!ok) sessionListWindow.show();
+      }
+    }, ok ? 2000 : 200);
     return ok;
   });
 

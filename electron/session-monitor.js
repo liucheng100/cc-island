@@ -363,46 +363,69 @@ class SessionMonitor extends EventEmitter {
   async focusSessionWindow(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session || !session.pid) return false;
+    const cwdName = JSON.stringify(session.cwd ? path.basename(session.cwd) : '');
+    const cwdPath = JSON.stringify(session.cwd || '');
     try {
       const psScript = `powershell -NoProfile -Command "
 Add-Type @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public class WinFocus {
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport(\\\"user32.dll\\\")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-  [DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport(\\\"user32.dll\\\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-  [DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport(\"user32.dll\")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 '@
-function Get-AncestorPids([int]\$pid) {
-  \$ids = New-Object System.Collections.Generic.HashSet[int]
+function Add-Parents([System.Collections.Generic.HashSet[int]]\$ids, [int]\$pid) {
   \$current = \$pid
-  for (\$i = 0; \$i -lt 8; \$i++) {
+  for (\$i = 0; \$i -lt 10; \$i++) {
     if (-not \$current -or \$current -eq 0) { break }
     [void]\$ids.Add([int]\$current)
-    \$proc = Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$current\\\" -ErrorAction SilentlyContinue
+    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
     if (-not \$proc) { break }
     \$current = [int]\$proc.ParentProcessId
   }
-  return \$ids
+}
+function Add-Children([System.Collections.Generic.HashSet[int]]\$ids, [int]\$pid, [int]\$depth) {
+  if (\$depth -le 0) { return }
+  \$children = Get-CimInstance Win32_Process -Filter \"ParentProcessId=\$pid\" -ErrorAction SilentlyContinue
+  foreach (\$child in \$children) {
+    [void]\$ids.Add([int]\$child.ProcessId)
+    Add-Children \$ids ([int]\$child.ProcessId) (\$depth - 1)
+  }
 }
 \$targetPid = ${session.pid}
-\$candidatePids = Get-AncestorPids \$targetPid
-\$targetWindow = [IntPtr]::Zero
+\$cwdName = ${cwdName}
+\$cwdPath = ${cwdPath}
+\$candidatePids = New-Object System.Collections.Generic.HashSet[int]
+Add-Parents \$candidatePids \$targetPid
+Add-Children \$candidatePids \$targetPid 4
+\$bestWindow = [IntPtr]::Zero
+\$fallbackWindow = [IntPtr]::Zero
 \$callback = [WinFocus+EnumWindowsProc]{ param([IntPtr]\$hWnd, [IntPtr]\$lParam)
   if (-not [WinFocus]::IsWindowVisible(\$hWnd)) { return \$true }
   \$windowPid = 0
   [void][WinFocus]::GetWindowThreadProcessId(\$hWnd, [ref]\$windowPid)
-  if (\$candidatePids.Contains([int]\$windowPid)) {
-    \$script:targetWindow = \$hWnd
-    return \$false
+  \$sb = New-Object System.Text.StringBuilder 512
+  [void][WinFocus]::GetWindowText(\$hWnd, \$sb, \$sb.Capacity)
+  \$title = \$sb.ToString()
+  if (\$candidatePids.Contains([int]\$windowPid)) { \$script:bestWindow = \$hWnd; return \$false }
+  \$proc = Get-Process -Id \$windowPid -ErrorAction SilentlyContinue
+  \$pname = if (\$proc) { \$proc.ProcessName.ToLowerInvariant() } else { '' }
+  \$isTerminal = \$pname -in @('cmd','powershell','pwsh','windowsterminal','conhost','bash','mintty','wezterm-gui','wezterm','tabby')
+  if (\$isTerminal -and \$title) {
+    if ((\$cwdName -and \$title.ToLowerInvariant().Contains(\$cwdName.ToLowerInvariant())) -or (\$cwdPath -and \$title.ToLowerInvariant().Contains(\$cwdPath.ToLowerInvariant()))) { \$script:bestWindow = \$hWnd; return \$false }
+    if (\$script:fallbackWindow -eq [IntPtr]::Zero) { \$script:fallbackWindow = \$hWnd }
   }
   return \$true
 }
 [void][WinFocus]::EnumWindows(\$callback, [IntPtr]::Zero)
+\$targetWindow = if (\$bestWindow -ne [IntPtr]::Zero) { \$bestWindow } else { \$fallbackWindow }
 if (\$targetWindow -ne [IntPtr]::Zero) {
   [WinFocus]::ShowWindow(\$targetWindow, 9) | Out-Null
   Start-Sleep -Milliseconds 80
@@ -410,15 +433,16 @@ if (\$targetWindow -ne [IntPtr]::Zero) {
   exit 0
 }
 exit 1
-"`;
+\""`;
       const { exec } = require('child_process');
       return await new Promise((resolve) => {
-        exec(psScript, { timeout: 8000 }, (err) => {
-          if (err) console.error('[SessionMonitor] Focus failed:', err.message);
+        exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
+          if (err) console.error('[SessionMonitor] Focus failed:', err.message, stderr || '');
           resolve(!err);
         });
       });
     } catch (e) {
+      console.error('[SessionMonitor] Focus exception:', e.message);
       return false;
     }
   }
