@@ -64,6 +64,24 @@ class WechatBridge extends EventEmitter {
             this.emit('status-changed', this.status);
           }
         }
+
+        // Parse incoming WeChat messages from Python bridge
+        const lines = output.split('\n');
+        for (const line of lines) {
+          if (line.includes('MESSAGE:')) {
+            try {
+              const jsonStr = line.substring(line.indexOf('MESSAGE:') + 8).trim();
+              const msg = JSON.parse(jsonStr);
+              this.emit('wechat-message', {
+                sender: msg.sender,
+                content: msg.content,
+                sessionId: msg.session_id,
+              });
+            } catch (e) {
+              console.error('[WeChat Bridge] Failed to parse message:', e.message);
+            }
+          }
+        }
       });
 
       this.pythonProcess.stderr.on('data', (data) => {

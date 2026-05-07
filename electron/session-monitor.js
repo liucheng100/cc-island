@@ -364,30 +364,52 @@ class SessionMonitor extends EventEmitter {
     const session = this.sessions.get(sessionId);
     if (!session || !session.pid) return false;
     try {
-      // Use PowerShell to find child console windows of the process
+      // Claude Code is a Node.js console process — MainWindowHandle is usually 0.
+      // Walk up the process tree to find a parent with a real window (cmd, PowerShell, Windows Terminal).
       const psScript = `powershell -NoProfile -Command "
-$parentId = ${session.pid};
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public class WinFocus {
 [DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
-[DllImport(\\\"user32.dll\\\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+[DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
 }
 '@
-$ps = Get-Process -Id $parentId -ErrorAction SilentlyContinue;
-if ($ps) {
-  if ($ps.MainWindowHandle -ne [IntPtr]::Zero) {
-    [WinFocus]::ShowWindow($ps.MainWindowHandle, 5);
-    [WinFocus]::SetForegroundWindow($ps.MainWindowHandle);
+function Try-Focus([int]\$pid) {
+  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
+  if (-not \$p) { return \$false }
+  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$p.MainWindowHandle)) {
+    [WinFocus]::ShowWindow(\$p.MainWindowHandle, 5) | Out-Null
+    [WinFocus]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
+    return \$true
+  }
+  return \$false
+}
+\$targetPid = ${session.pid}
+# Try the process itself first
+if (Try-Focus \$targetPid) { exit 0 }
+# Walk up parent chain (up to 5 levels)
+\$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$targetPid\\\").ParentProcessId
+for (\$i = 0; \$i -lt 5; \$i++) {
+  if (-not \$cid -or \$cid -eq 0) { break }
+  if (Try-Focus \$cid) { exit 0 }
+  \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$cid\\\").ParentProcessId
+}
+# Fallback: find visible windows owned by any process whose name matches terminal shells
+\$shellNames = @('cmd', 'powershell', 'pwsh', 'windowsterminal', 'conhost', 'tabby', 'hyper', 'wezterm')
+foreach (\$name in \$shellNames) {
+  \$procs = Get-Process -Name \$name -ErrorAction SilentlyContinue
+  foreach (\$pp in \$procs) {
+    if (\$pp.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$pp.MainWindowHandle)) {
+      [WinFocus]::ShowWindow(\$pp.MainWindowHandle, 5) | Out-Null
+      [WinFocus]::SetForegroundWindow(\$pp.MainWindowHandle) | Out-Null
+      exit 0
+    }
   }
 }
-# Also try to activate console via cmd
-& cmd /c 'start /min' 2>\$null
 \""`;
       const { exec } = require('child_process');
-      exec(psScript, { timeout: 5000 }, (err) => {
+      exec(psScript, { timeout: 8000 }, (err) => {
         if (err) console.error('[SessionMonitor] Focus failed:', err.message);
       });
       return true;
@@ -408,26 +430,49 @@ if ($ps) {
     session.lastActivity = new Date().toISOString();
 
     // Try to actually send keystrokes to the Claude CMD window
+    // Walk parent process tree to find a visible window (same logic as focusSessionWindow)
+    const escapedMsg = message.replace(/'/g, "''").replace(/[+^%~(){}[\]]/g, '{$&}');
     try {
       const psScript = `powershell -NoProfile -Command "
 Add-Type -AssemblyName System.Windows.Forms;
 Add-Type @'
 using System; using System.Runtime.InteropServices;
-public class WinKey {
+public class WinSend {
 [DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
 }
 '@
-$ps = Get-Process -Id ${session.pid} -ErrorAction SilentlyContinue;
-if (\$ps -and \$ps.MainWindowHandle -ne [IntPtr]::Zero) {
-  [WinKey]::ShowWindow(\$ps.MainWindowHandle, 5);
-  [WinKey]::SetForegroundWindow(\$ps.MainWindowHandle);
-  Start-Sleep -Milliseconds 100;
-  [System.Windows.Forms.SendKeys]::SendWait('${message.replace(/'/g, "''").replace(/[+^%~(){}[\]]/g, '{\\$&}')}');
+function Try-Focus([int]\$pid) {
+  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
+  if (-not \$p) { return \$false }
+  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinSend]::IsWindowVisible(\$p.MainWindowHandle)) {
+    [WinSend]::ShowWindow(\$p.MainWindowHandle, 5) | Out-Null
+    [WinSend]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
+    return \$true
+  }
+  return \$false
+}
+\$targetPid = ${session.pid}
+\$focused = Try-Focus \$targetPid
+if (-not \$focused) {
+  \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$targetPid\\\").ParentProcessId
+  for (\$i = 0; \$i -lt 5; \$i++) {
+    if (-not \$cid -or \$cid -eq 0) { break }
+    \$focused = Try-Focus \$cid
+    if (\$focused) { break }
+    \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$cid\\\").ParentProcessId
+  }
+}
+if (\$focused) {
+  Start-Sleep -Milliseconds 150;
+  [System.Windows.Forms.SendKeys]::SendWait('${escapedMsg}');
+  Start-Sleep -Milliseconds 50;
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}');
 }
 \""`;
       const { exec } = require('child_process');
-      exec(psScript, { timeout: 5000 }, (err) => {
+      exec(psScript, { timeout: 8000 }, (err) => {
         if (err) console.error('[SessionMonitor] SendKeys failed:', err.message);
       });
     } catch (e) {

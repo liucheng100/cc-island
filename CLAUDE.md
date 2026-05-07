@@ -1,88 +1,91 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 在本仓库中工作提供指引。
 
 ---
 
-## Project overview
+## 项目概述
 
-CC Island is a Windows desktop "Dynamic Island" (灵动岛) widget for Claude Code. A floating pill-shaped overlay sits on the desktop (always-on-top), monitors all local Claude Code CMD sessions in real time, and provides WeChat-based remote control via QR code.
+CC Island 是一个 Windows 桌面"灵动岛"小组件，用于 Claude Code。一个浮动药丸形悬浮窗始终置顶在桌面上，实时监控所有本地 Claude Code CMD 会话，并通过二维码提供微信远程控制功能。
 
-**Tech stack:** Electron 40.9.3 + React 18 + Vite 5 (renderer), Express + Socket.IO (local server), Python wxauto (WeChat bridge), electron-builder 25.1.8 (packaging).
+**技术栈：** Electron 40.9.3 + React 18 + Vite 5（渲染进程）、Express + Socket.IO（本地服务器）、Python wxauto（微信桥接）、electron-builder 25.1.8（打包）。
 
-## Essential commands
+## 常用命令
 
 ```bash
-# Build React frontend only
+# 仅构建 React 前端
 npm run build
 
-# Full build: Vite + electron-builder NSIS installer
+# 完整构建：Vite + electron-builder NSIS 安装包
 npm run electron:build
 
-# Dev mode (Vite dev server + Electron)
+# 开发模式（Vite 开发服务器 + Electron）
 npm run electron:dev
 
-# Preview without packaging (build then run electron)
+# 预览模式（构建后直接运行 electron，不打包）
 npm run electron:preview
 ```
 
-**Electron binary mirror** (required in China):
+**Electron 镜像**（国内必需）：
 ```bash
 set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 ```
 
-**Output:** Installer at `release\CC Island Setup 1.0.0.exe`, portable at `release\win-unpacked\CC Island.exe`.
+**输出：** 安装包在 `release\CC Island Setup 1.0.0.exe`，便携版在 `release\win-unpacked\CC Island.exe`。
 
-## Architecture
+## 架构
 
 ```
-Electron Main Process (electron/main.js)
-  ├── IslandWindow — frameless, transparent, always-on-top floating pill
-  ├── SessionList Window — expandable panel shown on click
-  ├── SystemTray (electron/tray.js) — tray icon + context menu
+Electron 主进程 (electron/main.js)
+  ├── IslandWindow — 无边框、透明、始终置顶的浮动药丸窗
+  ├── SessionList Window — 点击后展开的会话面板
+  ├── SystemTray (electron/tray.js) — 托盘图标 + 右键菜单
   ├── SessionMonitor (electron/session-monitor.js)
-  │     PowerShell/WMIC scan for real Claude processes every 5s
-  │     Uses CWD-hash as session key (not PID) to prevent duplicates
+  │     每5秒用 PowerShell/WMIC 扫描真实 Claude 进程
+  │     用 CWD 哈希作为会话 key（非 PID）防重复
   ├── WechatBridge (electron/wechat-bridge.js)
-  │     Spawns Python wxauto subprocess, manages WeChat message relay
+  │     启动 Python wxauto 子进程，管理微信消息转发
+  │     备选：wechat-ilink.js 使用 iLink Bot API（腾讯官方通道）
   └── LocalServer (electron/local-server.js)
-        Express + Socket.IO, REST API, SSH tunnel (serveo.net) for public URL
+        Express + Socket.IO、REST API、SSH 隧道 (serveo.net) 提供公网 URL
 
-IPC: preload.js → contextBridge → window.ccIsland API
+IPC：preload.js → contextBridge → window.ccIsland API
 
-Renderer (src/ via Vite → dist/)
-  App.jsx — hash-based view router, session state, notification sounds
-  DynamicIsland.jsx — pill UI with mousedown/mouseup drag-vs-click detection
-  SessionList.jsx — filter/search bar, session cards
-  SessionCard.jsx — expandable session detail with message input
-  QRCodeModal.jsx — QR code display + tunnel start/stop toggle
+渲染进程 (src/ 经 Vite → dist/)
+  App.jsx — 哈希路由、会话状态管理、通知音效
+  DynamicIsland.jsx — 药丸 UI，mousedown/mouseup 区分拖拽与点击
+  SessionList.jsx — 搜索筛选栏、会话卡片列表
+  SessionCard.jsx — 可展开的会话详情，含消息输入框
+  QRCodeModal.jsx — 二维码显示 + 隧道启停开关
+  StatusIndicator.jsx — 会话状态徽章（工作中/思考中/已完成/错误）
 
 Python (python/wechat_bridge.py)
-  wxauto UIAutomation for WeChat PC control, falls back to stub mode
+  wxauto UIAutomation 控制微信 PC 端，失败时回退到 stub 模式
 ```
 
-### Key design decisions
+### 关键设计决策
 
-- **Drag vs click**: Island window body is `-webkit-app-region: drag` for moving. Session list window body is `-webkit-app-region: no-drag` so all interactive elements work. `App.jsx` sets this dynamically based on `window.location.hash`.
-- **Session dedup**: CWD-hash as session key (one Claude session = one working directory, regardless of how many child processes it spawns).
-- **Process detection**: PowerShell `Get-CimInstance Win32_Process` filters for `@anthropic-ai/claude-code` / `claude-code` in command line. Excludes CC Island's own electron process.
-- **Public tunnel**: SSH reverse tunnel via `serveo.net`. QR codes auto-switch between LAN and public URLs.
-- **Notification sounds**: Web Audio API generates tones — C-E-G chord for completion, triangle wave for new session, square wave for errors.
+- **拖拽 vs 点击：** 灵动岛窗口使用纯 JS 拖拽（mousedown → mousemove → IPC `moveWindow` → mouseup）。不用 `-webkit-app-region: drag`，因为它会拦截所有 DOM 事件导致 React 处理器失效。会话列表窗口使用 `-webkit-app-region: no-drag` 保证交互元素可用。`App.jsx` 根据 `window.location.hash` 动态切换。
+- **会话去重：** 用 CWD 哈希作为会话 key（一个工作目录 = 一个会话，不管 fork 多少子进程）。
+- **进程检测：** PowerShell `Get-CimInstance Win32_Process` 过滤 `@anthropic-ai/claude-code` / `claude-code` 命令行，排除 CC Island 自身进程。
+- **公网隧道：** 通过 `serveo.net` 建立 SSH 反向隧道。二维码自动在局域网和公网 URL 间切换。
+- **通知音效：** Web Audio API 生成音调 — C-E-G 和弦表示完成，三角波表示新会话，方波表示错误。AudioContext 初始为 `suspended` 状态，必须在首次用户交互时 `resume()`。
+- **窗口定位：** 使用 `win.setBounds()` 而非 `win.setPosition()` — 后者会触发 resize 导致窗口大小抖动。
 
-## Critical constraints
+## 关键约束
 
-- **electron-builder is pinned to v25.1.8**. v26.x uses a Go-based app-builder that ignores the local NSIS cache and requires GitHub access for NSIS downloads.
-- **NSIS cache**: `%LOCALAPPDATA%\electron-builder\Cache\nsis\` must contain `nsis-3.0.4.1.7z` and `nsis-resources-3.4.1.7z`.
-- Windows-only (transparent frameless windows, PowerShell/WMIC, wxauto UIAutomation).
-- All operations within `E:\我的项目\agent\cc-island\`.
+- **electron-builder 锁定 v25.1.8**。v26.x 使用 Go 版 app-builder，会忽略本地 NSIS 缓存，强制从 GitHub 下载。
+- **NSIS 缓存：** `%LOCALAPPDATA%\electron-builder\Cache\nsis\` 必须包含 `nsis-3.0.4.1.7z` 和 `nsis-resources-3.4.1.7z`。
+- 仅限 Windows（透明无边框窗口、PowerShell/WMIC、wxauto UIAutomation）。
+- 所有操作在 `E:\我的项目\agent\cc-island\` 内进行。
 
-## User preferences
+## 用户偏好
 
-1. After fixing bugs, auto-launch `release\win-unpacked\CC Island.exe` for testing.
-2. Read bugs from `bug.md`, fix them, track completion in `task.md`.
-3. Commit git at appropriate intervals after meaningful changes.
-4. `bug.md` is the user's scratchpad — do NOT reformat, restructure, or modify format. Only read bugs from it.
-5. Play completion sound via Web Audio API after finishing tasks.
-6. Make all decisions autonomously — do not ask the user for approval.
-7. 用中文
-8. 按照bug.md的顺序解决
+1. 修复 bug 后自动启动 `release\win-unpacked\CC Island.exe` 进行测试。
+2. 从 `bug.md` 读取 bug，修复后在 `task.md` 中跟踪进度。
+3. 在有意义的变更后适时提交 git。
+4. `bug.md` 是用户的便签本 — 不要重新排版、重构或修改其格式，只从中读取 bug。
+5. 完成任务后通过 Web Audio API 播放完成音效。
+6. 自主决策 — 不需要向用户请示。
+7. 用中文交流。
+8. 按照 bug.md 的顺序解决 bug。

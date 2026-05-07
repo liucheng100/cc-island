@@ -135,6 +135,27 @@ app.whenReady().then(async () => {
     if (sessionListWindow && !sessionListWindow.isDestroyed()) sessionListWindow.webContents.send('wechat:status', status);
   });
 
+  // Public network message relay: API/WeChat → Claude session
+  localServer.on('session-message', (sessionId, message) => {
+    if (sessionMonitor) sessionMonitor.sendToSession(sessionId, message);
+  });
+
+  // WeChat message relay: WeChat → Claude session
+  wechatBridge.on('wechat-message', (data) => {
+    if (!sessionMonitor) return;
+    const { sender, content, sessionId } = data;
+    if (sessionId) {
+      sessionMonitor.sendToSession(sessionId, content);
+    } else {
+      // No linked session — forward to first active session
+      const sessions = sessionMonitor.getSessions();
+      const active = sessions.find((s) => s.status === 'working' || s.status === 'thinking');
+      if (active) {
+        sessionMonitor.sendToSession(active.id, content);
+      }
+    }
+  });
+
   console.log('CC Island started');
 });
 

@@ -237,92 +237,6 @@ class LocalServer extends EventEmitter {
     });
   }
 
-  async startTunnel(service = 'serveo') {
-    if (this.tunnelProcess) {
-      console.log('[Tunnel] Already running');
-      return this.tunnelStatus;
-    }
-
-    return new Promise((resolve) => {
-      const sshArgs = service === 'serveo'
-        ? ['-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-R', `80:localhost:${this.port}`, 'serveo.net']
-        : ['-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-R', `80:localhost:${this.port}`, 'nokey@localhost.run'];
-
-      console.log(`[Tunnel] Starting ${service} tunnel...`);
-      this.tunnelProcess = spawn('ssh', sshArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let resolved = false;
-
-      this.tunnelProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        console.log('[Tunnel]', output.trim());
-
-        // serveo.net output: "Forwarding HTTP traffic from https://xxx.serveo.net"
-        const serveoMatch = output.match(/https?:\/\/([\w-]+\.serveo\.net)/);
-        // localhost.run output: "https://xxx.lhr.life tunneled"
-        const lhrMatch = output.match(/https?:\/\/([\w-]+\.lhr\.life)/);
-
-        if ((serveoMatch || lhrMatch) && !resolved) {
-          const url = serveoMatch
-            ? `https://${serveoMatch[1]}`
-            : `https://${lhrMatch[1]}`;
-
-          this.publicURL = url;
-          this.tunnelStatus = { active: true, url, service };
-          resolved = true;
-          console.log(`[Tunnel] Public URL: ${url}`);
-          resolve(this.tunnelStatus);
-        }
-      });
-
-      this.tunnelProcess.stderr.on('data', (data) => {
-        const output = data.toString();
-        // serveo.net often outputs info to stderr
-        const serveoMatch = output.match(/https?:\/\/([\w-]+\.serveo\.net)/);
-        if (serveoMatch && !resolved) {
-          const url = `https://${serveoMatch[1]}`;
-          this.publicURL = url;
-          this.tunnelStatus = { active: true, url, service };
-          resolved = true;
-          console.log(`[Tunnel] Public URL (stderr): ${url}`);
-          resolve(this.tunnelStatus);
-        }
-      });
-
-      this.tunnelProcess.on('close', (code) => {
-        console.log(`[Tunnel] Process exited with code ${code}`);
-        this.tunnelProcess = null;
-        this.publicURL = null;
-        this.tunnelStatus = { active: false, url: null, service: null };
-        if (!resolved) {
-          resolved = true;
-          resolve(this.tunnelStatus);
-        }
-      });
-
-      this.tunnelProcess.on('error', (err) => {
-        console.error(`[Tunnel] Error: ${err.message}`);
-        this.tunnelProcess = null;
-        this.tunnelStatus = { active: false, url: null, service: null, error: err.message };
-        if (!resolved) {
-          resolved = true;
-          resolve(this.tunnelStatus);
-        }
-      });
-
-      // Timeout after 15 seconds
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          this.tunnelStatus = { active: false, url: null, service: null, error: 'Connection timeout' };
-          resolve(this.tunnelStatus);
-        }
-      }, 15000);
-    });
-  }
-
   stopTunnel() {
     if (this.tunnelProcess) {
       this.tunnelProcess.kill('SIGTERM');
@@ -332,6 +246,8 @@ class LocalServer extends EventEmitter {
     this.tunnelStatus = { active: false, url: null, service: null };
     console.log('[Tunnel] Stopped');
   }
+
+  getPublicURL() {
 
   getPublicURL() {
     return this.publicURL;

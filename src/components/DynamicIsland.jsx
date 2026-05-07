@@ -7,6 +7,7 @@ const STATUS_COLORS = {
 
 export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onClick }) {
   const [animationState, setAnimationState] = useState('idle');
+  const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false, winX: 0, winY: 0 });
   const islandRef = useRef(null);
 
@@ -24,6 +25,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     dragRef.current.startX = e.screenX;
     dragRef.current.startY = e.screenY;
     dragRef.current.moved = false;
+    setIsDragging(true);
   }, []);
 
   useEffect(() => {
@@ -43,6 +45,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     const onUp = () => {
       if (!dragRef.current.dragging) return;
       dragRef.current.dragging = false;
+      setIsDragging(false);
       if (!dragRef.current.moved) {
         onClick();
       }
@@ -62,7 +65,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
   return (
     <div
       ref={islandRef}
-      className={`dynamic-island ${animationState} ${hasActivity ? 'has-activity' : ''}`}
+      className={`dynamic-island ${animationState} ${hasActivity ? 'has-activity' : ''} ${isDragging ? 'dragging' : ''}`}
       onMouseDown={handleMouseDown}
       style={{ '--glow-color': glowColor }}
     >
@@ -123,7 +126,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
           background: linear-gradient(135deg, var(--glow-color), transparent, var(--glow-color));
           opacity: 0.3; z-index: -1; transition: opacity var(--transition);
         }
-        .dynamic-island:hover { border-color: var(--border-active); transform: scale(1.02); box-shadow: var(--shadow-glow); }
+        .dynamic-island:hover:not(.dragging) { border-color: var(--border-active); transform: scale(1.02); box-shadow: var(--shadow-glow); }
         .dynamic-island.has-activity::before { opacity: 0.6; animation: pulse-glow 2s ease-in-out infinite; }
         .island-inner { display: flex; align-items: center; height: 100%; padding: 0 12px; gap: 10px; pointer-events: none; }
         .island-icon { flex-shrink: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }

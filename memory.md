@@ -84,3 +84,18 @@ npm run electron:build  # electron-builder@25.1.8
 - 2026年3月腾讯开放 `ilinkai.weixin.qq.com` 个人号 Bot API
 - 支持 WebSocket 长连接 + HTTP 轮询双模式
 - 替代之前的逆向/Hook灰色方案
+
+### 11. CSS hover transform 会在拖拽时造成视觉抖动
+- `transform: scale(1.02)` 在 hover 时触发，拖拽过程中鼠标在元素上反复触发
+- 解决：拖拽时添加 `.dragging` class，用 `:not(.dragging)` 排除 hover 缩放
+- `.dynamic-island:hover:not(.dragging) { transform: scale(1.02); }`
+
+### 12. local-server.js 中不能定义同名方法
+- ES class 中后定义的同名方法会覆盖前面的
+- 两个 `startTunnel` 方法导致多服务 fallback 逻辑丢失
+- 用 tryTunnel/tryBoreTunnel/trySSHTunnel 拆分替代重复定义
+
+### 13. 微信消息链路必须完整连接
+- Python 桥接输出 `MESSAGE:{json}` → Electron 解析 → emit 事件 → main.js 转发
+- 每个环节都要显式连接，否则消息静默丢失
+- 公网路径：手机 → Socket.IO → localServer → sessionMonitor → SendKeys
