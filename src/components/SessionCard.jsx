@@ -36,6 +36,7 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
           <div className="card-title">
             <span className="session-name">{session.name}</span>
             <span className="session-cwd">{session.cwd}</span>
+            <span className="session-pid">PID:{session.pid} → Terminal:{session.terminalPid || session.parentPid || '?'}</span>
           </div>
         </div>
         <div className="card-header-right">
@@ -101,6 +102,7 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
         .card-title { display: flex; flex-direction: column; min-width: 0; }
         .session-name { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .session-cwd { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-pid { font-size: 9px; color: var(--text-muted); font-family: monospace; opacity: 0.7; }
         .card-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
         .session-duration { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
         .btn-focus, .btn-qr, .btn-expand { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
