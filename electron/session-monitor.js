@@ -492,65 +492,79 @@ exit 1
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    // Store message locally
     if (!session.messages) session.messages = [];
     session.messages.push({
       role: 'user', content: message, timestamp: new Date().toISOString(),
     });
     session.lastActivity = new Date().toISOString();
 
-    // Try to actually send keystrokes to the Claude CMD window
-    // Walk parent process tree to find a visible window (same logic as focusSessionWindow)
-    const escapedMsg = message.replace(/'/g, "''").replace(/[+^%~(){}[\]]/g, '{$&}');
-    try {
-      const psScript = `powershell -NoProfile -Command "
+    const targetPid = session.pid;
+    const parentPid = session.parentPid || 0;
+    const terminalPid = session.terminalPid || parentPid || targetPid;
+    const escapedMsg = message.replace(/'/g, "''");
+
+    const psScript = `powershell -NoProfile -Command "
 Add-Type -AssemblyName System.Windows.Forms;
 Add-Type @'
-using System; using System.Runtime.InteropServices;
+using System;
+using System.Runtime.InteropServices;
 public class WinSend {
-[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-[DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
 }
 '@
 function Try-Focus([int]\$pid) {
+  if (-not \$pid -or \$pid -eq 0) { return \$false }
   \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
   if (-not \$p) { return \$false }
   if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinSend]::IsWindowVisible(\$p.MainWindowHandle)) {
-    [WinSend]::ShowWindow(\$p.MainWindowHandle, 5) | Out-Null
+    [WinSend]::ShowWindow(\$p.MainWindowHandle, 9) | Out-Null
+    Start-Sleep -Milliseconds 80
     [WinSend]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
     return \$true
   }
   return \$false
 }
-\$targetPid = ${session.pid}
-\$focused = Try-Focus \$targetPid
+\$terminalPid = ${terminalPid}
+\$parentPid = ${parentPid}
+\$targetPid = ${targetPid}
+\$focused = Try-Focus \$terminalPid
+if (-not \$focused -and \$parentPid -ne \$terminalPid) { \$focused = Try-Focus \$parentPid }
+if (-not \$focused -and \$targetPid -ne \$terminalPid -and \$targetPid -ne \$parentPid) { \$focused = Try-Focus \$targetPid }
 if (-not \$focused) {
-  \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$targetPid\\\").ParentProcessId
+  \$current = \$terminalPid
   for (\$i = 0; \$i -lt 5; \$i++) {
-    if (-not \$cid -or \$cid -eq 0) { break }
-    \$focused = Try-Focus \$cid
+    if (-not \$current -or \$current -eq 0) { break }
+    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
+    if (-not \$proc) { break }
+    \$current = [int]\$proc.ParentProcessId
+    \$focused = Try-Focus \$current
     if (\$focused) { break }
-    \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$cid\\\").ParentProcessId
   }
 }
 if (\$focused) {
   Start-Sleep -Milliseconds 150;
-  [System.Windows.Forms.SendKeys]::SendWait('${escapedMsg}');
+  [System.Windows.Forms.Clipboard]::SetText('${escapedMsg}');
   Start-Sleep -Milliseconds 50;
+  [System.Windows.Forms.SendKeys]::SendWait('^v');
+  Start-Sleep -Milliseconds 100;
   [System.Windows.Forms.SendKeys]::SendWait('{ENTER}');
+  Write-Output 'sent'
+} else {
+  Write-Output 'no-window'
 }
-\""`;
-      const { exec } = require('child_process');
-      exec(psScript, { timeout: 8000 }, (err) => {
-        if (err) console.error('[SessionMonitor] SendKeys failed:', err.message);
+"`;
+    const { exec } = require('child_process');
+    return await new Promise((resolve) => {
+      exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
+        if (stdout) console.log('[Send]', stdout.trim(), 'sessionId=' + sessionId);
+        if (stderr) console.error('[Send stderr]', stderr.trim());
+        if (err) console.error('[Send] FAILED for', sessionId, err.message);
+        this.emit('sessions-updated', this.getSessions());
+        resolve(!err);
       });
-    } catch (e) {
-      console.error('[SessionMonitor] Send failed:', e.message);
-    }
-
-    this.emit('sessions-updated', this.getSessions());
-    return true;
+    });
   }
 }
 
