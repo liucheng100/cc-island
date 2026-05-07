@@ -103,7 +103,16 @@ function setupIPC() {
   ipcMain.handle('get-tunnel-status', () => localServer ? localServer.getTunnelStatus() : null);
   ipcMain.handle('start-tunnel', () => localServer ? localServer.startTunnel() : false);
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
-  ipcMain.handle('focus-session-window', (_, id) => sessionMonitor ? sessionMonitor.focusSessionWindow(id) : false);
+  ipcMain.handle('focus-session-window', async (_, id) => {
+    if (!sessionMonitor) return false;
+    if (sessionListWindow && !sessionListWindow.isDestroyed()) sessionListWindow.hide();
+    if (islandWindow && !islandWindow.isDestroyed()) islandWindow.setAlwaysOnTop(false);
+    const ok = await sessionMonitor.focusSessionWindow(id);
+    setTimeout(() => {
+      if (islandWindow && !islandWindow.isDestroyed()) islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    }, 1500);
+    return ok;
+  });
 
   // Pure JS window drag — keep known fixed window sizes stable
   ipcMain.on('move-window', (event, dx, dy) => {

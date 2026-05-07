@@ -364,55 +364,60 @@ class SessionMonitor extends EventEmitter {
     const session = this.sessions.get(sessionId);
     if (!session || !session.pid) return false;
     try {
-      // Claude Code is a Node.js console process — MainWindowHandle is usually 0.
-      // Walk up the process tree to find a parent with a real window (cmd, PowerShell, Windows Terminal).
       const psScript = `powershell -NoProfile -Command "
 Add-Type @'
-using System; using System.Runtime.InteropServices;
+using System;
+using System.Runtime.InteropServices;
 public class WinFocus {
-[DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-[DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport(\\\"user32.dll\\\")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport(\\\"user32.dll\\\")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport(\\\"user32.dll\\\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport(\\\"user32.dll\\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport(\\\"user32.dll\\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 '@
-function Try-Focus([int]\$pid) {
-  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
-  if (-not \$p) { return \$false }
-  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$p.MainWindowHandle)) {
-    [WinFocus]::ShowWindow(\$p.MainWindowHandle, 5) | Out-Null
-    [WinFocus]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
-    return \$true
+function Get-AncestorPids([int]\$pid) {
+  \$ids = New-Object System.Collections.Generic.HashSet[int]
+  \$current = \$pid
+  for (\$i = 0; \$i -lt 8; \$i++) {
+    if (-not \$current -or \$current -eq 0) { break }
+    [void]\$ids.Add([int]\$current)
+    \$proc = Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$current\\\" -ErrorAction SilentlyContinue
+    if (-not \$proc) { break }
+    \$current = [int]\$proc.ParentProcessId
   }
-  return \$false
+  return \$ids
 }
 \$targetPid = ${session.pid}
-# Try the process itself first
-if (Try-Focus \$targetPid) { exit 0 }
-# Walk up parent chain (up to 5 levels)
-\$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$targetPid\\\").ParentProcessId
-for (\$i = 0; \$i -lt 5; \$i++) {
-  if (-not \$cid -or \$cid -eq 0) { break }
-  if (Try-Focus \$cid) { exit 0 }
-  \$cid = (Get-CimInstance Win32_Process -Filter \\\"ProcessId=\$cid\\\").ParentProcessId
-}
-# Fallback: find visible windows owned by any process whose name matches terminal shells
-\$shellNames = @('cmd', 'powershell', 'pwsh', 'windowsterminal', 'conhost', 'tabby', 'hyper', 'wezterm')
-foreach (\$name in \$shellNames) {
-  \$procs = Get-Process -Name \$name -ErrorAction SilentlyContinue
-  foreach (\$pp in \$procs) {
-    if (\$pp.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$pp.MainWindowHandle)) {
-      [WinFocus]::ShowWindow(\$pp.MainWindowHandle, 5) | Out-Null
-      [WinFocus]::SetForegroundWindow(\$pp.MainWindowHandle) | Out-Null
-      exit 0
-    }
+\$candidatePids = Get-AncestorPids \$targetPid
+\$targetWindow = [IntPtr]::Zero
+\$callback = [WinFocus+EnumWindowsProc]{ param([IntPtr]\$hWnd, [IntPtr]\$lParam)
+  if (-not [WinFocus]::IsWindowVisible(\$hWnd)) { return \$true }
+  \$windowPid = 0
+  [void][WinFocus]::GetWindowThreadProcessId(\$hWnd, [ref]\$windowPid)
+  if (\$candidatePids.Contains([int]\$windowPid)) {
+    \$script:targetWindow = \$hWnd
+    return \$false
   }
+  return \$true
 }
-\""`;
+[void][WinFocus]::EnumWindows(\$callback, [IntPtr]::Zero)
+if (\$targetWindow -ne [IntPtr]::Zero) {
+  [WinFocus]::ShowWindow(\$targetWindow, 9) | Out-Null
+  Start-Sleep -Milliseconds 80
+  [WinFocus]::SetForegroundWindow(\$targetWindow) | Out-Null
+  exit 0
+}
+exit 1
+"`;
       const { exec } = require('child_process');
-      exec(psScript, { timeout: 8000 }, (err) => {
-        if (err) console.error('[SessionMonitor] Focus failed:', err.message);
+      return await new Promise((resolve) => {
+        exec(psScript, { timeout: 8000 }, (err) => {
+          if (err) console.error('[SessionMonitor] Focus failed:', err.message);
+          resolve(!err);
+        });
       });
-      return true;
     } catch (e) {
       return false;
     }
