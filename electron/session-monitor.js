@@ -54,6 +54,8 @@ class SessionMonitor extends EventEmitter {
         } else {
           const existing = this.sessions.get(key);
           existing.pid = proc.pid; // update PID in case process restarted
+          existing.parentPid = proc.parentPid || 0;
+          existing.terminalPid = proc.terminalPid || 0;
           existing.commandLine = proc.commandLine;
           existing.lastActivity = new Date().toISOString();
 
@@ -103,7 +105,7 @@ class SessionMonitor extends EventEmitter {
       // Use PowerShell to find genuine Claude Code processes
       // Claude Code CLI: command line contains "@anthropic-ai/claude-code" or runs "claude" binary
       // Claude Code Desktop: process name is "Claude" or "Claude Code"
-      const psCmd = `powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process; $results = @(); foreach ($p in $procs) { $cl = if($p.CommandLine) { $p.CommandLine } else { '' }; $nm = if($p.Name) { $p.Name } else { '' }; if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code' -or $cl -match '\\\\\\\\claude\\\\b' -or $nm -match '^claude$' -or $nm -match '^Claude' -or $nm -match 'Claude Code') { $results += $p } }; $results | Select-Object ProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
+      const psCmd = `powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process; $results = @(); foreach ($p in $procs) { $cl = if($p.CommandLine) { $p.CommandLine } else { '' }; $nm = if($p.Name) { $p.Name } else { '' }; if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code' -or $cl -match '(^|[\\\\/ ])claude(\\.exe)?( |$)' -or $nm -match '^claude(\\.exe)?$' -or $nm -match '^Claude' -or $nm -match 'Claude Code') { $results += $p } }; $results | Select-Object ProcessId, ParentProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
 
       exec(psCmd, { timeout: 10000 }, async (err, stdout) => {
         if (err || !stdout || stdout.trim().length === 0) {
@@ -119,8 +121,9 @@ class SessionMonitor extends EventEmitter {
           if (parts.length < 3) continue;
 
           const pid = parts[0].replace(/"/g, '').trim();
-          const name = parts[1].replace(/"/g, '').trim();
-          const cmdLine = parts.slice(2).join('","').replace(/"/g, '').trim();
+          const parentPid = parts[1].replace(/"/g, '').trim();
+          const name = parts[2].replace(/"/g, '').trim();
+          const cmdLine = parts.slice(3).join('","').replace(/"/g, '').trim();
 
           if (!pid || isNaN(parseInt(pid))) continue;
 
@@ -132,9 +135,12 @@ class SessionMonitor extends EventEmitter {
 
           const cwd = await this.extractCwd(pid, cmdLine);
           const sessionName = this.extractSessionName(cmdLine, cwd, name);
+          const terminalPid = await this.findTerminalPid(parseInt(pid), parseInt(parentPid) || 0);
 
           tasks.push({
             pid: parseInt(pid),
+            parentPid: parseInt(parentPid) || 0,
+            terminalPid: terminalPid,
             name: sessionName,
             cwd: cwd,
             commandLine: cmdLine.substring(0, 500),
@@ -146,51 +152,98 @@ class SessionMonitor extends EventEmitter {
     });
   }
 
+  async findTerminalPid(pid, parentPid) {
+    // Walk up parent chain to find CMD/PowerShell/Windows Terminal/conhost
+    const terminalNames = new Set(['cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'conhost.exe']);
+    let currentPid = parentPid || pid;
+    for (let i = 0; i < 10; i++) {
+      if (!currentPid || currentPid === 0) break;
+      const info = await this.getProcessInfo(currentPid);
+      if (!info) break;
+      const name = (info.Name || '').toLowerCase();
+      if (terminalNames.has(name)) return currentPid;
+      if (!info.ParentProcessId || info.ParentProcessId === 0) break;
+      currentPid = info.ParentProcessId;
+    }
+    // Fallback: return parent if it exists, else pid itself
+    return parentPid || pid;
+  }
+
   async extractCwd(pid, cmdLine) {
     // Method 1: Parse from command line
     const cwdMatch = cmdLine.match(/(?:--cwd|--dir)\s+["']?([^"'\s]+)/i);
     if (cwdMatch && fs.existsSync(cwdMatch[1])) return cwdMatch[1];
 
-    // Method 2: Query process working directory via PowerShell
+    // Method 2: Walk up parent chain to find a CMD/terminal with a real CWD
     try {
-      const cwd = await this.queryProcessCwd(pid);
-      if (cwd && fs.existsSync(cwd)) return cwd;
+      const cwd = await this.queryProcessCwdViaParent(pid);
+      if (cwd && cwd !== os.homedir() && fs.existsSync(cwd)) return cwd;
     } catch (e) { /* ignore */ }
 
-    // Method 3: Extract Windows path from command line
+    // Method 3: Extract Windows path from command line (skip claude.exe install paths)
     const pathMatch = cmdLine.match(/([A-Z]:\\[^"'\s]+)/i);
     if (pathMatch) {
       const candidate = pathMatch[1];
-      if (fs.existsSync(candidate)) return candidate;
-      // Try parent directory
-      const parent = path.dirname(candidate);
-      if (fs.existsSync(parent)) return parent;
+      // Skip paths that look like claude.exe install locations
+      if (!candidate.toLowerCase().includes('claude') || !candidate.toLowerCase().endsWith('.exe')) {
+        if (fs.existsSync(candidate)) return candidate;
+        const parent = path.dirname(candidate);
+        if (fs.existsSync(parent)) return parent;
+      }
     }
 
     return os.homedir();
   }
 
-  async queryProcessCwd(pid) {
-    return new Promise((resolve, reject) => {
-      const cmd = `wmic process where ProcessId=${pid} get ExecutablePath /format:csv 2>nul`;
+  async queryProcessCwdViaParent(pid) {
+    // Walk up parent chain to find CMD/PowerShell/Windows Terminal, then get its CWD
+    let currentPid = pid;
+    for (let i = 0; i < 10; i++) {
+      const info = await this.getProcessInfo(currentPid);
+      if (!info) break;
+      const name = (info.Name || '').toLowerCase();
+      if (name === 'cmd.exe' || name === 'powershell.exe' || name === 'pwsh.exe' || name === 'windowsterminal.exe') {
+        // Try to get CWD from /proc-style or working directory
+        const cwd = await this.getCwdFromWindow(info.Name, info.CommandLine);
+        if (cwd) return cwd;
+      }
+      if (!info.ParentProcessId || info.ParentProcessId === 0) break;
+      currentPid = info.ParentProcessId;
+    }
+    return null;
+  }
+
+  async getProcessInfo(pid) {
+    return new Promise((resolve) => {
+      const cmd = `wmic process where ProcessId=${pid} get Name,ParentProcessId,CommandLine /format:csv 2>nul`;
       exec(cmd, { timeout: 3000 }, (err, stdout) => {
-        if (err || !stdout) { reject(err); return; }
-        const lines = stdout.trim().split('\n');
-        if (lines.length < 2) { reject(new Error('no data')); return; }
-        const exePath = lines[1].split(',').pop().replace(/"/g, '').trim();
-        if (exePath) {
-          resolve(path.dirname(exePath));
-        } else {
-          reject(new Error('no path'));
-        }
+        if (err || !stdout) { resolve(null); return; }
+        const lines = stdout.trim().split('\n').filter(l => l.trim());
+        if (lines.length < 2) { resolve(null); return; }
+        const parts = lines[1].split(',');
+        resolve({
+          Name: (parts[1] || '').trim(),
+          ParentProcessId: parseInt(parts[2]) || 0,
+          CommandLine: parts.slice(3).join(',').trim(),
+        });
       });
     });
+  }
+
+  async getCwdFromWindow(processName, cmdLine) {
+    // Try to extract CWD from CMD /K or /C patterns
+    const cdMatch = cmdLine.match(/cd\s+["']?([^"'&|]+)/i);
+    if (cdMatch && fs.existsSync(cdMatch[1].trim())) return cdMatch[1].trim();
+    // Try pushd
+    const pushdMatch = cmdLine.match(/pushd\s+["']?([^"'&|]+)/i);
+    if (pushdMatch && fs.existsSync(pushdMatch[1].trim())) return pushdMatch[1].trim();
+    return null;
   }
 
   async findClaudeProcessesWMIC() {
     return new Promise((resolve) => {
       // Narrower WMIC query — only look for processes likely to be Claude
-      const cmd = `wmic process where "name='node.exe' or name='claude.exe' or name='Claude.exe' or name like 'Claude%'" get ProcessId,Name,CommandLine /format:csv 2>nul`;
+      const cmd = `wmic process where "name='node.exe' or name='claude.exe' or name='Claude.exe' or name like 'Claude%'" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`;
       exec(cmd, { timeout: 5000 }, async (err, stdout) => {
         if (err || !stdout) { resolve([]); return; }
 
@@ -201,9 +254,10 @@ class SessionMonitor extends EventEmitter {
           const parts = line.split(',');
           if (parts.length < 3) continue;
 
-          const name = (parts[1] || '').trim();
-          const pid = (parts[2] || '').trim();
-          const cmdLine = parts.slice(3).join(',').trim();
+          const pid = (parts[1] || '').trim();
+          const parentPid = (parts[2] || '').trim();
+          const name = (parts[3] || '').trim();
+          const cmdLine = parts.slice(4).join(',').trim();
 
           if (!pid || isNaN(parseInt(pid))) continue;
 
@@ -221,8 +275,11 @@ class SessionMonitor extends EventEmitter {
           const cwd = await this.extractCwd(pid, cmdLine);
           const sessionName = this.extractSessionName(cmdLine, cwd, name);
 
+          const terminalPid = await this.findTerminalPid(parseInt(pid), parseInt(parentPid) || 0);
           tasks.push({
             pid: parseInt(pid),
+            parentPid: parseInt(parentPid) || 0,
+            terminalPid: terminalPid,
             name: sessionName,
             cwd: cwd,
             commandLine: cmdLine.substring(0, 500),
@@ -363,86 +420,67 @@ class SessionMonitor extends EventEmitter {
   async focusSessionWindow(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session || !session.pid) return false;
-    const cwdName = JSON.stringify(session.cwd ? path.basename(session.cwd) : '');
-    const cwdPath = JSON.stringify(session.cwd || '');
+    const targetPid = session.pid;
+    const parentPid = session.parentPid || 0;
+    const terminalPid = session.terminalPid || parentPid || targetPid;
     try {
       const psScript = `powershell -NoProfile -Command "
 Add-Type @'
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
 public class WinFocus {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport(\"user32.dll\")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
   [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
 }
 '@
-function Add-Parents([System.Collections.Generic.HashSet[int]]\$ids, [int]\$pid) {
-  \$current = \$pid
-  for (\$i = 0; \$i -lt 10; \$i++) {
-    if (-not \$current -or \$current -eq 0) { break }
-    [void]\$ids.Add([int]\$current)
-    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
-    if (-not \$proc) { break }
-    \$current = [int]\$proc.ParentProcessId
+function Try-Focus([int]\$pid) {
+  if (-not \$pid -or \$pid -eq 0) { return \$false }
+  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
+  if (-not \$p) { return \$false }
+  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$p.MainWindowHandle)) {
+    [WinFocus]::ShowWindow(\$p.MainWindowHandle, 9) | Out-Null
+    Start-Sleep -Milliseconds 80
+    [WinFocus]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
+    return \$true
   }
+  return \$false
 }
-function Add-Children([System.Collections.Generic.HashSet[int]]\$ids, [int]\$pid, [int]\$depth) {
-  if (\$depth -le 0) { return }
+\$terminalPid = ${terminalPid}
+\$parentPid = ${parentPid}
+\$targetPid = ${targetPid}
+if (Try-Focus \$terminalPid) { exit 0 }
+if (Try-Focus \$parentPid) { exit 0 }
+if (Try-Focus \$targetPid) { exit 0 }
+\$current = \$terminalPid
+for (\$i = 0; \$i -lt 10; \$i++) {
+  if (-not \$current -or \$current -eq 0) { break }
+  \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
+  if (-not \$proc) { break }
+  \$current = [int]\$proc.ParentProcessId
+  if (Try-Focus \$current) { exit 0 }
+}
+function Focus-Children([int]\$pid, [int]\$depth) {
+  if (\$depth -le 0) { return \$false }
   \$children = Get-CimInstance Win32_Process -Filter \"ParentProcessId=\$pid\" -ErrorAction SilentlyContinue
   foreach (\$child in \$children) {
-    [void]\$ids.Add([int]\$child.ProcessId)
-    Add-Children \$ids ([int]\$child.ProcessId) (\$depth - 1)
+    if (Try-Focus \$child.ProcessId) { return \$true }
+    if (Focus-Children \$child.ProcessId (\$depth - 1)) { return \$true }
   }
+  return \$false
 }
-\$targetPid = ${session.pid}
-\$cwdName = ${cwdName}
-\$cwdPath = ${cwdPath}
-\$candidatePids = New-Object System.Collections.Generic.HashSet[int]
-Add-Parents \$candidatePids \$targetPid
-Add-Children \$candidatePids \$targetPid 4
-\$bestWindow = [IntPtr]::Zero
-\$fallbackWindow = [IntPtr]::Zero
-\$callback = [WinFocus+EnumWindowsProc]{ param([IntPtr]\$hWnd, [IntPtr]\$lParam)
-  if (-not [WinFocus]::IsWindowVisible(\$hWnd)) { return \$true }
-  \$windowPid = 0
-  [void][WinFocus]::GetWindowThreadProcessId(\$hWnd, [ref]\$windowPid)
-  \$sb = New-Object System.Text.StringBuilder 512
-  [void][WinFocus]::GetWindowText(\$hWnd, \$sb, \$sb.Capacity)
-  \$title = \$sb.ToString()
-  if (\$candidatePids.Contains([int]\$windowPid)) { \$script:bestWindow = \$hWnd; return \$false }
-  \$proc = Get-Process -Id \$windowPid -ErrorAction SilentlyContinue
-  \$pname = if (\$proc) { \$proc.ProcessName.ToLowerInvariant() } else { '' }
-  \$isTerminal = \$pname -in @('cmd','powershell','pwsh','windowsterminal','conhost','bash','mintty','wezterm-gui','wezterm','tabby')
-  if (\$isTerminal -and \$title) {
-    if ((\$cwdName -and \$title.ToLowerInvariant().Contains(\$cwdName.ToLowerInvariant())) -or (\$cwdPath -and \$title.ToLowerInvariant().Contains(\$cwdPath.ToLowerInvariant()))) { \$script:bestWindow = \$hWnd; return \$false }
-    if (\$script:fallbackWindow -eq [IntPtr]::Zero) { \$script:fallbackWindow = \$hWnd }
-  }
-  return \$true
-}
-[void][WinFocus]::EnumWindows(\$callback, [IntPtr]::Zero)
-\$targetWindow = if (\$bestWindow -ne [IntPtr]::Zero) { \$bestWindow } else { \$fallbackWindow }
-if (\$targetWindow -ne [IntPtr]::Zero) {
-  [WinFocus]::ShowWindow(\$targetWindow, 9) | Out-Null
-  Start-Sleep -Milliseconds 80
-  [WinFocus]::SetForegroundWindow(\$targetWindow) | Out-Null
-  exit 0
-}
+if (Focus-Children \$targetPid 4) { exit 0 }
 exit 1
 \""`;
       const { exec } = require('child_process');
       return await new Promise((resolve) => {
-        exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
-          if (err) console.error('[SessionMonitor] Focus failed:', err.message, stderr || '');
+        exec(psScript, { timeout: 10000 }, (err) => {
+          if (err) console.error('[SessionMonitor] Focus failed for', sessionId);
+          else console.log('[SessionMonitor] Focus OK for', sessionId);
           resolve(!err);
         });
       });
     } catch (e) {
-      console.error('[SessionMonitor] Focus exception:', e.message);
       return false;
     }
   }
