@@ -1,24 +1,61 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DynamicIsland from './components/DynamicIsland';
-import SessionList from './components/SessionList';
 import QRCodeModal from './components/QRCodeModal';
+import SettingsPanel from './components/SettingsPanel';
 import { playCompletionSound, playErrorSound, playNewSessionSound } from './hooks/useNotification';
 import './App.css';
 
-const VIEWS = { ISLAND: 'island', SESSIONS: 'sessions' };
-
 export default function App() {
-  const [view, setView] = useState(VIEWS.ISLAND);
   const [sessions, setSessions] = useState([]);
   const [wechatStatus, setWechatStatus] = useState({ connected: false });
   const [isExpanded, setIsExpanded] = useState(false);
   const [qrSession, setQrSession] = useState(null);
+  const [currentView, setCurrentView] = useState('sessions');
+  const [settings, setSettings] = useState({ theme: 'dark' });
   const prevStatusRef = useRef({});
+  const settingsRef = useRef(settings);
+  const settingsLoadedRef = useRef(false);
+  const isExpandedRef = useRef(false);
 
+  // Keep settingsRef in sync
   useEffect(() => {
-    const hash = window.location.hash.replace('#/', '');
-    setView(hash === 'sessions' ? VIEWS.SESSIONS : VIEWS.ISLAND);
+    settingsRef.current = settings;
+  }, [settings]);
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme);
+  }, [settings.theme]);
+
+  // Load settings on startup
+  useEffect(() => {
+    if (!window.ccIsland) return;
+    window.ccIsland.getSettings().then((s) => {
+      if (s && !settingsLoadedRef.current) {
+        settingsLoadedRef.current = true;
+        setSettings(s);
+      }
+    });
+    const unsub = window.ccIsland.onSettingsLoaded((s) => {
+      if (s && !settingsLoadedRef.current) {
+        settingsLoadedRef.current = true;
+        setSettings(s);
+      }
+    });
+    return () => { if (unsub) unsub(); };
   }, []);
+
+  // Listen for open:settings from tray
+  useEffect(() => {
+    if (!window.ccIsland) return;
+    const unsub = window.ccIsland.onOpenSettings(() => {
+      if (!isExpanded && window.ccIsland) {
+        window.ccIsland.toggleIsland();
+      }
+      setCurrentView('settings');
+    });
+    return () => { if (unsub) unsub(); };
+  }, [isExpanded]);
 
   useEffect(() => {
     if (!window.ccIsland) return;
@@ -28,8 +65,13 @@ export default function App() {
       const prev = prevStatusRef.current;
 
       for (const s of list) {
-        if (!prev[s.id]) { playNewSessionSound(); }
-        if (prev[s.id] && prev[s.id] !== 'completed' && s.status === 'completed') { playCompletionSound(); }
+        if (!prev[s.id] && settingsRef.current.soundNewTask !== false) { playNewSessionSound(); }
+        if (prev[s.id] && (prev[s.id] === 'answering' || prev[s.id] === 'thinking') && s.status === 'completed') {
+          if (settingsRef.current.soundCompletion !== false) playCompletionSound();
+          if (window.ccIsland && !isExpandedRef.current) {
+            window.ccIsland.toggleIsland();
+          }
+        }
         if (prev[s.id] && prev[s.id] !== 'error' && s.status === 'error') { playErrorSound(); }
       }
 
@@ -40,11 +82,12 @@ export default function App() {
     });
 
     const unsub2 = window.ccIsland.onWechatStatus((status) => setWechatStatus(status));
-    const unsub3 = window.ccIsland.onIslandExpand(() => setIsExpanded(true));
-    const unsub4 = window.ccIsland.onIslandCollapse(() => setIsExpanded(false));
+    const unsub3 = window.ccIsland.onIslandExpand(() => { setIsExpanded(true); isExpandedRef.current = true; });
+    const unsub4 = window.ccIsland.onIslandCollapse(() => { setIsExpanded(false); isExpandedRef.current = false; setCurrentView('sessions'); });
 
     window.ccIsland.getSessions().then(setSessions);
     window.ccIsland.getWechatStatus().then(setWechatStatus);
+    window.ccIsland.getIslandState().then((v) => { setIsExpanded(v); isExpandedRef.current = v; });
 
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
@@ -57,25 +100,61 @@ export default function App() {
   const handleCloseQR = useCallback(() => setQrSession(null), []);
   const handleSendMessage = useCallback(async (sessionId, message) => {
     if (window.ccIsland) return window.ccIsland.sendToSession(sessionId, message);
-    return false;
+    return { success: false, error: 'ccIsland API not available' };
   }, []);
   const handleFocusCMD = useCallback(async (sessionId) => {
     if (window.ccIsland) return window.ccIsland.focusSessionWindow(sessionId);
     return false;
   }, []);
 
-  if (view === VIEWS.ISLAND) {
-    return (
-      <div className="app island-app">
-        <DynamicIsland sessions={sessions} isExpanded={isExpanded} wechatStatus={wechatStatus} onClick={handleIslandClick} />
-      </div>
-    );
-  }
+  const handleSaveSettings = useCallback((newSettings) => {
+    setSettings(newSettings);
+    if (window.ccIsland) {
+      window.ccIsland.saveSettings(newSettings);
+      if (newSettings.toggleShortcut !== settings.toggleShortcut) {
+        window.ccIsland.updateGlobalShortcut(newSettings.toggleShortcut);
+      }
+    }
+  }, [settings.toggleShortcut]);
+
+  const handleOpenSettings = useCallback(() => {
+    setCurrentView('settings');
+  }, []);
+
+  // Block Ctrl+W to prevent window close (global toggle is handled by main process globalShortcut)
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.ctrlKey && e.key === 'w') {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const settingsPanel = currentView === 'settings' ? (
+    <SettingsPanel
+      settings={settings}
+      onSave={handleSaveSettings}
+      onBack={() => setCurrentView('sessions')}
+    />
+  ) : null;
 
   return (
-    <div className="app sessions-app">
-      <SessionList sessions={sessions} wechatStatus={wechatStatus}
-        onShowQR={handleShowQR} onSendMessage={handleSendMessage} onFocusCMD={handleFocusCMD} />
+    <div className="app-container">
+      <DynamicIsland
+        sessions={sessions}
+        isExpanded={isExpanded}
+        wechatStatus={wechatStatus}
+        onClick={handleIslandClick}
+        onShowQR={handleShowQR}
+        onSendMessage={handleSendMessage}
+        onFocusCMD={handleFocusCMD}
+        onOpenSettings={handleOpenSettings}
+        showTips={settings.showTips !== false}
+        toggleShortcut={settings.toggleShortcut}
+        panelContent={settingsPanel}
+      />
       {qrSession && <QRCodeModal session={qrSession} onClose={handleCloseQR} />}
     </div>
   );
