@@ -3,299 +3,764 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>CC Island - Claude 遥控器</title>
+  <title>CC Island - 会话管理</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
-      --bg: #0d0d12;
-      --bg2: #16161e;
-      --bg3: #1e1e2a;
-      --border: #2a2a3a;
-      --text: #e8e8f0;
-      --text2: #9898b0;
-      --accent: #6366f1;
-      --success: #22c55e;
-      --danger: #ef4444;
+      --bg: #0d0d12; --bg2: #16161e; --bg3: #1e1e2a;
+      --border: #2a2a3a; --border-subtle: rgba(255,255,255,0.06);
+      --text: #e8e8f0; --text2: #9898b0;
+      --accent: #6366f1; --success: #22c55e; --danger: #ef4444;
     }
+    html, body { height: 100%; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column;
+      -webkit-tap-highlight-color: transparent;
+      min-width: 0;
     }
+    .sidebar, .detail-hdr, .input-bar, .tabs-wrap { user-select: none; }
+    .sidebar { position: relative; }
     /* Header */
     .header {
-      background: var(--bg2);
-      border-bottom: 1px solid var(--border);
-      padding: 16px;
-      text-align: center;
-      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; flex-shrink: 0; min-width: 0; overflow: hidden;
+      background: var(--bg2); border-bottom: 1px solid var(--border);
+    }
+    .header-l { display: flex; align-items: center; gap: 8px; }
+    .logo {
+      width: 26px; height: 26px; border-radius: 13px; flex-shrink: 0;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      display: flex; align-items: center; justify-content: center; font-size: 13px;
     }
     .header h1 {
-      font-size: 17px;
-      font-weight: 700;
-      background: linear-gradient(135deg, #6366f1, #a855f7);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      font-size: 15px; font-weight: 700;
+      background: linear-gradient(135deg, #c4b5fd, #a78bfa);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .header .subtitle {
-      font-size: 11px;
-      color: var(--text2);
-      margin-top: 4px;
+    .header-r { display: flex; gap: 6px; align-items: center; }
+    .pill {
+      font-size: 10px; padding: 3px 8px; border-radius: 10px;
+      background: rgba(255,255,255,0.06); color: var(--text2);
+      border: 1px solid var(--border-subtle); white-space: nowrap;
     }
-    .status-bar {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      margin-top: 8px;
-      font-size: 12px;
+    .pill.live { border-color: rgba(34,197,94,0.4); color: var(--success); }
+    .pill.live::before {
+      content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+      background: var(--success); margin-right: 4px;
+      box-shadow: 0 0 5px rgba(34,197,94,0.5);
     }
-    .status-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      display: inline-block;
+    /* Tabs row with search */
+    .tabs-row {
+      display: flex; align-items: center; gap: 4px;
+      padding: 8px 8px 6px 12px; flex-shrink: 0;
     }
-    .status-dot.working {
-      background: var(--accent);
-      box-shadow: 0 0 8px rgba(99,102,241,0.6);
-      animation: pulse 1.5s infinite;
+    .tabs-wrap {
+      display: flex; gap: 5px; flex: 1; min-width: 0;
+      overflow-x: auto; scrollbar-width: none;
     }
-    .status-dot.completed {
-      background: var(--success);
-      box-shadow: 0 0 8px rgba(34,197,94,0.6);
+    .tabs-wrap::-webkit-scrollbar { display: none; }
+    .search-btn {
+      background: none; border: none; color: var(--text2); cursor: pointer;
+      padding: 5px; border-radius: 6px; display: flex; flex-shrink: 0;
+      transition: all 0.15s;
     }
-    @keyframes pulse {
-      0%,100% { opacity:1; }
-      50% { opacity:0.4; }
+    .search-btn.active { color: var(--accent); background: rgba(99,102,241,0.1); }
+    .search-dropdown {
+      display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+      padding: 6px 12px 8px; background: var(--bg2); border-bottom: 1px solid var(--border);
     }
+    .search-dropdown.show { display: block; }
+    .search-dropdown input {
+      width: 100%; padding: 6px 10px; border-radius: 6px;
+      background: var(--bg3); border: 1px solid var(--border);
+      font-size: 12px; color: var(--text); outline: none;
+    }
+    .search-dropdown input::placeholder { color: var(--text2); }
+    .tabs-wrap::-webkit-scrollbar { display: none; }
+    .tab {
+      display: flex; align-items: center; gap: 5px;
+      padding: 6px 10px; border-radius: 14px; flex-shrink: 0;
+      background: var(--bg3); border: 1px solid var(--border);
+      cursor: pointer; transition: all 0.15s; font-size: 11px;
+      white-space: nowrap; max-width: 140px;
+    }
+    .tab:active { transform: scale(0.97); }
+    .tab.sel { background: rgba(99,102,241,0.12); border-color: var(--accent); }
+    .tab-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .tab-name { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+    .tab.sel .tab-name { color: var(--accent); font-weight: 600; }
+    /* Main area */
+    .main-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .empty-state {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 10px;
+      color: var(--text2); padding: 20px;
+    }
+    .empty-state svg { opacity: 0.25; }
+    .empty-state p { font-size: 12px; }
+    /* Detail header */
+    .detail-hdr {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; flex-shrink: 0;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(255,255,255,0.02);
+    }
+    .btn-icon {
+      background: none; border: none; color: var(--text2); cursor: pointer;
+      padding: 4px; border-radius: 5px; display: flex; flex-shrink: 0;
+    }
+    .btn-icon:active { background: rgba(255,255,255,0.06); color: var(--text); }
+    .detail-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .detail-info .name {
+      font-size: 12px; font-weight: 600; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .detail-info .meta { font-size: 10px; color: var(--text2); white-space: nowrap; }
     /* Messages */
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+    .msg-list {
+      flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto;
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+      -webkit-overflow-scrolling: touch;
     }
     .msg {
-      max-width: 85%;
-      padding: 10px 14px;
-      border-radius: 16px;
-      font-size: 14px;
-      line-height: 1.5;
-      word-break: break-word;
-      animation: msgIn 0.3s ease-out;
+      max-width: 88%; padding: 9px 12px; border-radius: 14px;
+      font-size: 13px; line-height: 1.5;
+      word-break: break-word; overflow-wrap: break-word; min-width: 0;
+      animation: msgIn 0.2s ease-out;
     }
-    @keyframes msgIn {
-      from { opacity:0; transform: translateY(8px); }
-      to { opacity:1; transform: translateY(0); }
-    }
-    .msg.user {
-      align-self: flex-end;
-      background: var(--accent);
-      color: white;
-      border-bottom-right-radius: 4px;
-    }
-    .msg.assistant {
-      align-self: flex-start;
-      background: var(--bg3);
-      color: var(--text);
-      border-bottom-left-radius: 4px;
-      border: 1px solid var(--border);
-    }
-    .msg .msg-time {
-      font-size: 9px;
-      opacity: 0.6;
-      margin-top: 4px;
-      text-align: right;
-    }
-    .msg.system {
-      align-self: center;
-      background: transparent;
-      color: var(--text2);
-      font-size: 11px;
-      padding: 4px 12px;
-    }
+    @keyframes msgIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+    .msg.asst { align-self: flex-start; background: var(--bg3); color: var(--text); border-bottom-left-radius: 5px; border: 1px solid var(--border); }
+    .msg .ts { font-size: 9px; opacity: 0.5; margin-top: 2px; text-align: right; }
+    .msg.pending { opacity: 0.7; }
+    .msg.fail { border: 1px solid var(--danger); opacity: 0.6; }
+    .sending-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.3); animation: sendPulse 0.8s ease-in-out infinite; }
+    @keyframes sendPulse { 0%,100% { opacity: 0.2; } 50% { opacity: 0.8; } }
+    .msg.asst code{background:rgba(0,0,0,0.2);padding:1px 4px;border-radius:3px;font-family:monospace;font-size:11px}
+    .msg.asst pre{background:rgba(0,0,0,0.25);padding:7px 9px;border-radius:6px;overflow-x:auto;margin:3px 0;font-size:11px}
+    .msg.asst pre code{background:none;padding:0}
+    .msg.asst a{color:var(--accent)}
+    .msg.asst strong{color:#fff;font-weight:700}
+    .msg.asst em{color:var(--text2)}
+    .msg.asst ul,.msg.asst ol{margin:2px 0;padding-left:16px}
+    .msg.asst li{margin:1px 0}
+    .msg.asst blockquote{border-left:2px solid rgba(255,255,255,0.15);padding-left:8px;margin:3px 0;opacity:0.8}
+    .msg.asst h1,.msg.asst h2,.msg.asst h3,.msg.asst h4{font-size:13px;font-weight:700;margin:4px 0 2px}
+    .msg.asst hr{border:none;border-top:1px solid rgba(255,255,255,0.1);margin:4px 0}
+    .msg.asst table{border-collapse:collapse;font-size:11px;margin:3px 0}
+    .msg.asst th,.msg.asst td{border:1px solid rgba(255,255,255,0.15);padding:2px 6px}
+    .msg.user code{background:rgba(255,255,255,0.18);padding:1px 4px;border-radius:3px;font-size:11px}
+    .msg.user pre{background:rgba(255,255,255,0.12);padding:7px 9px;border-radius:6px;overflow-x:auto;margin:3px 0;font-size:11px}
+    .msg.user strong{color:#fff}
+    .msg.user a{color:#c7d2fe}
+    .think { align-self: flex-start; padding: 6px 12px; display: flex; gap: 2px; }
+    .think i { font-style: normal; font-size: 16px; color: var(--accent); animation: dotBounce 1.2s ease-in-out infinite; }
+    .think i:nth-child(1){animation-delay:0s}
+    .think i:nth-child(2){animation-delay:0.2s}
+    .think i:nth-child(3){animation-delay:0.4s}
+    @keyframes dotBounce { 0%,60%,100%{opacity:0.12} 30%{opacity:1} }
     /* Input */
     .input-bar {
-      background: var(--bg2);
-      border-top: 1px solid var(--border);
-      padding: 12px 16px;
-      display: flex;
-      gap: 10px;
-      flex-shrink: 0;
-      padding-bottom: max(12px, env(safe-area-inset-bottom));
+      display: flex; gap: 7px; padding: 10px 12px; flex-shrink: 0;
+      background: var(--bg2); border-top: 1px solid var(--border);
+      padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
     }
     .input-bar input {
-      flex: 1;
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 10px 16px;
-      font-size: 14px;
-      color: var(--text);
-      outline: none;
+      flex: 1; min-width: 0; background: var(--bg3);
+      border: 1px solid var(--border); border-radius: 18px;
+      padding: 9px 14px; font-size: 13px; color: var(--text); outline: none;
     }
-    .input-bar input:focus {
-      border-color: var(--accent);
+    .input-bar input:focus { border-color: var(--accent); }
+    .input-bar input:disabled { opacity: 0.35; }
+    .btn-send {
+      width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+      border: none; background: var(--accent); color: #fff;
+      font-size: 15px; cursor: pointer; display: flex;
+      align-items: center; justify-content: center;
     }
-    .input-bar button {
-      width: 44px; height: 44px;
-      border-radius: 50%;
-      border: none;
-      background: var(--accent);
-      color: white;
-      font-size: 18px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
+    .btn-send:active { transform: scale(0.95); }
+    .btn-send:disabled { opacity: 0.3; }
+    .btn-new-session {
+      background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle);
+      color: var(--text2); cursor: pointer; padding: 3px 6px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s; flex-shrink: 0;
     }
-    .input-bar button:active {
-      transform: scale(0.95);
+    .btn-new-session:active { background: rgba(99,102,241,0.2); color: var(--accent); }
+    /* === PIN overlay === */
+    .pin-overlay {
+      position: fixed; inset: 0; background: var(--bg);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 1000; padding: 20px;
     }
-    .input-bar button:disabled {
-      opacity: 0.4;
+    .pin-box { text-align: center; max-width: 300px; width: 100%; }
+    .pin-box h2 { font-size: 18px; margin-bottom: 6px; }
+    .pin-box .sub { font-size: 12px; color: var(--text2); margin-bottom: 20px; }
+    .pin-input {
+      width: 100%; padding: 10px 16px; border-radius: 12px; text-align: center;
+      font-size: 24px; letter-spacing: 8px; font-family: monospace;
+      background: var(--bg3); border: 1px solid var(--border);
+      color: var(--text); outline: none; margin-bottom: 14px;
     }
-    /* Toast */
-    .toast {
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      padding: 10px 20px;
-      border-radius: 20px;
-      font-size: 13px;
-      z-index: 100;
-      animation: toastIn 0.3s ease-out;
+    .pin-input:focus { border-color: var(--accent); }
+    .pin-btn {
+      width: 100%; padding: 10px; border-radius: 12px; border: none;
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
     }
-    @keyframes toastIn {
-      from { opacity:0; transform: translateX(-50%) translateY(-10px); }
-      to { opacity:1; transform: translateX(-50%) translateY(0); }
+    .pin-btn:active { transform: scale(0.97); }
+    .pin-btn:disabled { opacity: 0.5; }
+    .pin-err { font-size: 11px; color: var(--danger); margin-top: 10px; min-height: 18px; }
+    .pin-pending { font-size: 11px; color: var(--warning); margin-top: 10px; }
+    /* App UI */
+    #appUi { flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
+    /* Desktop */
+    @media (min-width: 640px) {
+      #appUi { flex-direction: row; }
+      .sidebar {
+        width: 260px; max-width: 40vw; flex-shrink: 0;
+        display: flex; flex-direction: column; overflow: hidden;
+        border-right: 1px solid var(--border); background: var(--bg2);
+      }
+      .tabs-wrap {
+        flex-direction: column; overflow-y: auto; overflow-x: hidden;
+        flex: 1; min-height: 0; padding: 0;
+      }
+      .tab { border-radius: 0; border: none; border-left: 2px solid transparent; padding: 9px 12px; font-size: 12px; max-width: none; }
+      .tab.sel { background: rgba(99,102,241,0.08); border-left-color: var(--accent); }
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>🤖 CC Island 遥控器</h1>
-    <div class="subtitle" id="sessionName">连接中...</div>
-    <div class="status-bar">
-      <span class="status-dot working" id="statusDot"></span>
-      <span id="statusText">连接中</span>
+  <!-- PIN Login Overlay -->
+  <div class="pin-overlay" id="pinOverlay">
+    <div class="pin-box">
+      <h2>CC Island</h2>
+      <p class="sub">请输入 6 位数访问密码</p>
+      <input type="text" class="pin-input" id="pinInput" inputmode="numeric" maxlength="6" placeholder="000000" autofocus />
+      <button class="pin-btn" id="pinBtn">验证</button>
+      <div class="pin-err" id="pinErr"></div>
+      <div class="pin-pending" id="pinPending" style="display:none">等待桌面端审批...</div>
     </div>
   </div>
 
-  <div class="messages" id="messages">
-    <div class="msg system">正在连接 Claude 会话...</div>
+  <!-- Main UI (hidden until auth) -->
+  <div id="appUi" style="display:none">
+  <div class="sidebar" id="sidebar">
+    <div class="header">
+      <div class="header-l"><div class="logo">🏝</div><h1>CC Island</h1></div>
+      <div class="header-r">
+        <button class="btn-new-session" id="btnNewSession" title="新建 Claude CMD">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <span class="pill" id="wsBadge">连接中</span>
+        <span class="pill" id="cntBadge">0</span>
+      </div>
+    </div>
+    <div class="tabs-row">
+      <div class="tabs-wrap" id="tabList"></div>
+      <button class="search-btn" id="searchBtn" title="搜索">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      </button>
+    </div>
+    <div class="search-dropdown" id="searchDropdown">
+      <input type="text" id="searchInput" placeholder="搜索会话..." />
+    </div>
   </div>
 
-  <div class="input-bar">
-    <input type="text" id="msgInput" placeholder="输入指令..." />
-    <button id="sendBtn">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-      </svg>
-    </button>
+  <div class="main-area" id="mainArea">
+    <div class="empty-state" id="emptyState">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M8 12h8M12 8v8"/></svg>
+      <p id="emptyText">暂无活跃的 Claude 会话</p>
+    </div>
+    <div class="detail-hdr" id="detailHdr" style="display:none">
+      <button class="btn-icon" id="btnBack"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <div class="detail-info"><span class="name" id="detailName"></span><span class="meta" id="detailMeta"></span></div>
+      <button class="btn-icon" id="btnFocus" style="display:none" title="弹出 CMD"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+    </div>
+    <div class="msg-list" id="msgList"></div>
+    <div class="input-bar" id="inputBar" style="display:none">
+      <input type="text" id="msgInput" placeholder="输入指令..." />
+      <button class="btn-send" id="sendBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+    </div>
+  </div>
   </div>
 
+  <script src="/lib/fp/fp.umd.min.js"></script>
+  <script src="/lib/marked/marked.umd.js"></script>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/mobile/shared.js"></script>
   <script>
-    const sessionId = window.location.pathname.split('/').pop();
-    const socket = io();
+  (function() {
+    // ===== Auth state =====
+    var accessPin = '';
+    var deviceId = '';
 
-    const messagesEl = document.getElementById('messages');
-    const msgInput = document.getElementById('msgInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const statusDot = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const sessionNameEl = document.getElementById('sessionName');
+    // Load/save deviceId from localStorage
+    function getDeviceId() {
+      var stored = localStorage.getItem('cc-island-device-id');
+      if (stored) return stored;
+      // Try FPJS, fallback to random
+      if (typeof FingerprintJS !== 'undefined') {
+        FingerprintJS.load().then(function(fp) { return fp.get(); }).then(function(r) {
+          var id = r.visitorId;
+          localStorage.setItem('cc-island-device-id', id);
+          deviceId = id;
+        }).catch(function() {
+          deviceId = 'dev-' + Math.random().toString(36).substring(2, 12);
+          localStorage.setItem('cc-island-device-id', deviceId);
+        });
+        return stored || 'pending';
+      }
+      var fallback = 'dev-' + Math.random().toString(36).substring(2, 12);
+      localStorage.setItem('cc-island-device-id', fallback);
+      return fallback;
+    }
 
-    let isConnected = false;
+    deviceId = getDeviceId();
 
-    socket.on('connect', () => {
-      socket.emit('join-session', sessionId);
+    // URL params
+    var urlSid = window.location.pathname.split('/').pop();
+    var urlParams = new URLSearchParams(window.location.search);
+    var urlPin = urlParams.get('pin') || '';
+
+    // ===== PIN Login =====
+    var $pinOverlay = document.getElementById('pinOverlay');
+    var $pinInput = document.getElementById('pinInput');
+    var $pinBtn = document.getElementById('pinBtn');
+    var $pinErr = document.getElementById('pinErr');
+    var $pinPending = document.getElementById('pinPending');
+    var $appUi = document.getElementById('appUi');
+
+    // Load cached PIN
+    var cachedPin = '';
+    try { cachedPin = localStorage.getItem('cc-island-pin') || ''; } catch(e) {}
+    if (urlPin) {
+      $pinInput.value = urlPin;
+    } else if (cachedPin) {
+      $pinInput.value = cachedPin;
+    }
+
+    function tryAuth(pin) {
+      $pinErr.textContent = '';
+      $pinPending.style.display = 'none';
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/auth');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        try {
+          var r = JSON.parse(xhr.responseText);
+          if (r.ok) {
+            accessPin = pin;
+            try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+            $pinOverlay.style.display = 'none';
+            $appUi.style.display = 'flex';
+            try { history.replaceState({}, '', location.pathname); } catch(e) {}
+            initApp();
+          } else if (r.pending) {
+            $pinPending.style.display = 'block';
+            // Poll for approval
+            var pollTimer = setInterval(function() {
+              var px = new XMLHttpRequest();
+              px.open('POST', '/api/auth');
+              px.setRequestHeader('Content-Type', 'application/json');
+              px.onload = function() {
+                try {
+                  var pr = JSON.parse(px.responseText);
+                  if (pr.ok) {
+                    clearInterval(pollTimer);
+                    accessPin = pin;
+                    try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+                    $pinOverlay.style.display = 'none';
+                    $appUi.style.display = 'flex';
+                    try { history.replaceState({}, '', location.pathname); } catch(e) {}
+                    initApp();
+                  }
+                } catch(e) {}
+              };
+              px.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
+            }, 3000);
+          } else {
+            if (r.reason === 'pin') { try { localStorage.removeItem('cc-island-pin'); } catch(e) {} }
+            $pinErr.textContent = r.reason === 'pin' ? '密码错误' : r.reason === 'device_rejected' ? '设备未获授权' : '验证失败';
+          }
+        } catch(e) {
+          $pinErr.textContent = '请求失败，请检查网络连接';
+        }
+      };
+      xhr.onerror = function() {
+        $pinErr.textContent = '无法连接到服务器';
+      };
+      xhr.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
+    }
+
+    $pinBtn.addEventListener('click', function() {
+      var pin = $pinInput.value.trim();
+      if (pin.length !== 6) { $pinErr.textContent = '请输入6位数字密码'; return; }
+      tryAuth(pin);
+    });
+    $pinInput.addEventListener('input', function() {
+      var val = $pinInput.value.replace(/\D/g, '').substring(0, 6);
+      $pinInput.value = val;
+      if (val.length === 6) tryAuth(val);
+    });
+    $pinInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { var v = $pinInput.value.trim(); if (v.length === 6) tryAuth(v); }
     });
 
-    socket.on('session-data', (session) => {
-      sessionNameEl.textContent = session.name || 'Claude 会话';
-      updateStatus(session.status);
-      if (session.messages) {
-        messagesEl.innerHTML = '';
-        session.messages.forEach(addMessage);
+    // Auto-try cached or URL pin
+    var autoPin = urlPin || cachedPin;
+    if (autoPin && autoPin.length === 6) {
+      setTimeout(function() { tryAuth(autoPin); }, 300);
+    }
+
+    // ===== Main App (only after auth) =====
+    function initApp() {
+      if (!deviceId || deviceId === 'pending') {
+        // Re-try FPJS
+        if (typeof FingerprintJS !== 'undefined') {
+          FingerprintJS.load().then(function(fp) { return fp.get(); }).then(function(r) {
+            deviceId = r.visitorId;
+            localStorage.setItem('cc-island-device-id', deviceId);
+            connectSocket();
+          });
+        } else {
+          deviceId = 'dev-' + Math.random().toString(36).substring(2, 12);
+          localStorage.setItem('cc-island-device-id', deviceId);
+          connectSocket();
+        }
+        return;
+      }
+      connectSocket();
+    }
+
+    var socket;
+    function connectSocket() {
+      socket = io({ auth: { pin: accessPin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) } });
+      setupSocket();
+    }
+
+    function authGet(url, cb) {
+      var sep = url.indexOf('?') >= 0 ? '&' : '?';
+      var full = url + sep + 'pin=' + encodeURIComponent(accessPin) + '&deviceId=' + encodeURIComponent(deviceId);
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', full);
+      xhr.onload = function() {
+        try { cb(JSON.parse(xhr.responseText)); }
+        catch(e) { cb(null); }
+      };
+      xhr.onerror = function() { cb(null); };
+      xhr.send();
+    }
+
+    // ===== Socket & App =====
+    function setupSocket() {
+    // DOM
+    var $tabList = document.getElementById('tabList');
+    var $searchInput = document.getElementById('searchInput');
+    var $wsBadge = document.getElementById('wsBadge');
+    var $cntBadge = document.getElementById('cntBadge');
+    var $emptyState = document.getElementById('emptyState');
+    var $detailHdr = document.getElementById('detailHdr');
+    var $detailName = document.getElementById('detailName');
+    var $detailMeta = document.getElementById('detailMeta');
+    var $msgList = document.getElementById('msgList');
+    var $inputBar = document.getElementById('inputBar');
+    var $msgInput = document.getElementById('msgInput');
+    var $sendBtn = document.getElementById('sendBtn');
+    var $btnBack = document.getElementById('btnBack');
+    var $btnFocus = document.getElementById('btnFocus');
+    var $btnNewSession = document.getElementById('btnNewSession');
+
+    var allSessions = [];
+    var selectedId = null;
+    var messageCount = 0;
+    var isSending = false;
+    var followBottom = true;
+    var inputCache = {};
+    var msgIdSeq = 0;
+    var pendingMsgs = {};
+    var lastStatus = '';
+    var msgCache = {}; // sessionId → { messages, count, hash }
+
+    socket.on('connect', function() {
+      $wsBadge.textContent = '已连接';
+      $wsBadge.className = 'pill live';
+      loadSessionList();
+      if (selectedId) {
+        socket.emit('join-session', selectedId);
+        loadSessionDetail(selectedId);
       }
     });
 
-    socket.on('session-updated', (session) => {
-      updateStatus(session.status);
+    socket.on('disconnect', function() {
+      $wsBadge.textContent = '断开';
+      $wsBadge.className = 'pill';
     });
 
-    socket.on('new-message', (msg) => {
-      addMessage(msg);
-      scrollToBottom();
+    socket.on('send-error', function(data) {
+      // Session was removed before message could be delivered
+      Object.keys(pendingMsgs).forEach(function(cid) {
+        var p = pendingMsgs[cid];
+        clearTimeout(p.timer);
+        p.el.classList.add('fail');
+        p.el.classList.remove('pending');
+        delete pendingMsgs[cid];
+      });
     });
 
-    function updateStatus(status) {
-      statusDot.className = 'status-dot ' + status;
-      const statusMap = {
-        working: 'Claude 工作中',
-        thinking: 'Claude 思考中',
-        completed: '已完成',
-        error: '发生错误',
-        disconnected: '已断开'
-      };
-      statusText.textContent = statusMap[status] || status;
+    socket.on('auth-error', function(data) {
+      accessPin = '';
+      try { localStorage.removeItem('cc-island-pin'); } catch(e) {}
+      $appUi.style.display = 'none';
+      $pinOverlay.style.display = 'flex';
+      $pinErr.textContent = data.reason === 'pin' ? '密码已变更，请重新输入' : '设备权限已被撤销';
+    });
+
+    socket.on('ping', function() { socket.emit('pong'); });
+
+    socket.on('sessions-updated', function(list) {
+      if (!list) return;
+      // Compare ID+status hash to detect additions, removals, or status changes
+      var prevHash = allSessions.map(function(s){return s.id + ':' + s.status;}).sort().join(',');
+      var newHash = list.map(function(s){return s.id + ':' + s.status;}).sort().join(',');
+      allSessions = list;
+      $cntBadge.textContent = allSessions.length;
+      if (allSessions.length === 0) { selectedId = null; hideDetail(); }
+      if (prevHash !== newHash || allSessions.length === 0) {
+        renderTabs();
+      }
+      if (selectedId) {
+        var s = allSessions.find(function(s){return s.id===selectedId});
+        if (s) { updateDetailHeader(s); addThinkDot(s); }
+        else { selectedId = null; hideDetail(); }
+      }
+      if (!selectedId && allSessions.length > 0) {
+        selectSession(allSessions[0].id);
+      }
+    });
+
+    socket.on('session-messages', function(data) {
+      if (!data || data.sessionId !== selectedId) return;
+      if (data.delta && data.delta.length > 0) {
+        var consumed = confirmPending(data.delta);
+        data.delta.forEach(function(m) {
+          if (m.role === 'user' && consumed.has(m.content)) return;
+          appendMsg(m);
+        });
+        messageCount = data.messages ? data.messages.length : (messageCount + data.delta.length);
+        // Update cache
+        if (data.messages) {
+          msgCache[data.sessionId] = { messages: data.messages, count: data.messages.length, status: data.status };
+        }
+        var s = allSessions.find(function(s){return s.id===selectedId});
+        var st = data.status || (s ? s.status : null);
+        if (s) updateDetailHeader(s);
+        addThinkDot(st ? { status: st } : s);
+        if (followBottom) scrollToBottom();
+      }
+    });
+
+    function loadSessionList() { authGet('/api/sessions', function(list) {
+      if (!list) return;
+      allSessions = list;
+      $cntBadge.textContent = allSessions.length;
+      renderTabs();
+      if (allSessions.length === 0) { selectedId = null; hideDetail(); return; }
+      if (selectedId && !allSessions.find(function(s){return s.id===selectedId})) { selectSession(allSessions[0].id); }
+      if (!selectedId) {
+        var autoId = (urlSid && allSessions.find(function(s){return s.id===urlSid})) ? urlSid : allSessions[0].id;
+        selectSession(autoId);
+      }
+    });}
+
+    function loadSessionDetail(id) { authGet('/api/sessions/' + encodeURIComponent(id), function(detail) {
+      if (!detail || detail.id !== selectedId) return;
+      var newCount = detail.messages ? detail.messages.length : 0;
+      var cached = msgCache[id];
+      // If cache is up-to-date, skip DOM rebuild
+      if (cached && cached.count === newCount) {
+        updateDetailHeader(detail);
+        addThinkDot(detail);
+        return;
+      }
+      // Update cache and rebuild
+      msgCache[id] = { messages: detail.messages || [], count: newCount, status: detail.status };
+      messageCount = newCount;
+      updateDetailHeader(detail);
+      $msgList.innerHTML = '';
+      if (detail.messages && detail.messages.length > 0) {
+        detail.messages.forEach(function(m) { appendMsg(m); });
+      } else {
+        $msgList.innerHTML = '<div class="msg sys">暂无对话记录</div>';
+      }
+      addThinkDot(detail);
+      if (followBottom) scrollToBottom();
+    });}
+
+    function appendMsg(msg) {
+      var div = document.createElement('div');
+      var role = msg.role || 'system';
+      div.className = 'msg ' + (role === 'assistant' ? 'asst' : role === 'user' ? 'user' : 'sys');
+      div.innerHTML = '<div>' + renderContent(msg.content || '') + '</div><div class="ts">' + formatTime(msg.timestamp) + '</div>';
+      $msgList.appendChild(div);
     }
 
-    function addMessage(msg) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + (msg.role || 'system');
-      div.innerHTML = `
-        <div class="msg-text">${escapeHtml(msg.content || '')}</div>
-        <div class="msg-time">${formatTime(msg.timestamp)}</div>
-      `;
-      messagesEl.appendChild(div);
+    function addThinkDot(s) {
+      var st = s ? s.status : '';
+      var old = $msgList.querySelector('.think');
+      // Status unchanged but dots exist — just move to bottom
+      if (st === lastStatus && old) {
+        $msgList.appendChild(old);
+        return;
+      }
+      if (old) old.remove();
+      lastStatus = st;
+      if (st === 'thinking' || st === 'answering') {
+        var dots = document.createElement('div');
+        dots.className = 'think';
+        dots.innerHTML = '<i>.</i><i>.</i><i>.</i>';
+        $msgList.appendChild(dots);
+      }
     }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+    function renderTabs() {
+      var q = $searchInput.value.trim().toLowerCase();
+      var filtered = q ? allSessions.filter(function(s) {
+        return s.name.toLowerCase().indexOf(q) >= 0 || (s.cwd && s.cwd.toLowerCase().indexOf(q) >= 0);
+      }) : allSessions;
+      $tabList.innerHTML = '';
+      if (filtered.length === 0) { $tabList.innerHTML = '<div style="padding:16px;text-align:center;font-size:11px;color:var(--text2)">无匹配会话</div>'; return; }
+      filtered.forEach(function(s) {
+        var el = document.createElement('div');
+        el.className = 'tab' + (s.id === selectedId ? ' sel' : '');
+        var name = (s.name || 'Claude').replace(/^\[[^\]]+\]\s*/, '');
+        el.innerHTML = '<span class="tab-dot" style="background:' + (STATUS_COLORS[s.status] || STATUS_COLORS.disconnected) + '"></span><span class="tab-name">' + escapeHtml(name) + '</span>';
+        el.addEventListener('click', function() { selectSession(s.id); });
+        $tabList.appendChild(el);
+      });
     }
 
-    function formatTime(ts) {
-      if (!ts) return '';
-      return new Date(ts).toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' });
+    function selectSession(id) {
+      if (selectedId === id) return;
+      if (selectedId) { inputCache[selectedId] = $msgInput.value; socket.emit('leave-session', selectedId); }
+      selectedId = id;
+      lastStatus = '';
+      if (!id) { hideDetail(); renderTabs(); return; }
+      socket.emit('join-session', id);
+      showDetail();
+      renderTabs();
+      $msgList.innerHTML = '';
+      $msgInput.value = inputCache[id] || '';
+      // Show cached messages instantly
+      var cached = msgCache[id];
+      if (cached && cached.messages) {
+        messageCount = cached.count;
+        cached.messages.forEach(function(m) { appendMsg(m); });
+        addThinkDot({ status: cached.status || '' });
+        if (followBottom) scrollToBottom();
+      }
+      // Fetch from server to verify/update
+      loadSessionDetail(id);
     }
 
-    function scrollToBottom() {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    function showDetail() { $emptyState.style.display = 'none'; $detailHdr.style.display = 'flex'; $msgList.style.display = 'flex'; $inputBar.style.display = 'flex'; setTimeout(function(){ $msgInput.focus(); }, 100); }
+    function hideDetail() { $emptyState.style.display = 'flex'; $detailHdr.style.display = 'none'; $msgList.style.display = 'none'; $inputBar.style.display = 'none'; $msgList.innerHTML = ''; lastStatus = ''; }
+
+    function updateDetailHeader(s) {
+      $detailName.textContent = s.name || 'Claude';
+      var dur = s.workingDuration ? formatDuration(s.workingDuration) : '';
+      var st = STATUS_MAP[s.status] || s.status || '';
+      $detailMeta.textContent = [dur, st].filter(Boolean).join(' · ');
+      $btnFocus.style.display = (s.status === 'working' || s.status === 'thinking' || s.status === 'answering') ? 'flex' : 'none';
     }
 
     function sendMessage() {
-      const text = msgInput.value.trim();
+      if (isSending || !selectedId) return;
+      var text = $msgInput.value.trim();
       if (!text) return;
-      msgInput.value = '';
-      socket.emit('send-message', { sessionId, message: text });
-      addMessage({ role: 'user', content: text, timestamp: new Date().toISOString() });
+      isSending = true;
+      $msgInput.value = '';
+      $sendBtn.disabled = true;
+      var clientId = 'msg-' + (++msgIdSeq);
+      var el = appendPendingMsg(text, clientId);
+      followBottom = true;
       scrollToBottom();
+      var timer = setTimeout(function() {
+        if (pendingMsgs[clientId]) { pendingMsgs[clientId].el.classList.add('fail'); pendingMsgs[clientId].el.classList.remove('pending'); delete pendingMsgs[clientId]; }
+      }, 60000);
+      pendingMsgs[clientId] = { el: el, content: text, timer: timer };
+      socket.emit('send-message', { sessionId: selectedId, message: text });
+      setTimeout(function() { isSending = false; $sendBtn.disabled = false; $msgInput.focus(); }, 600);
     }
 
-    sendBtn.addEventListener('click', sendMessage);
-    msgInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
+    function appendPendingMsg(text, clientId) {
+      var div = document.createElement('div');
+      div.className = 'msg user pending';
+      div.setAttribute('data-cid', clientId);
+      div.innerHTML = '<div>' + renderContent(text) + '</div><div class="ts"><span class="sending-dot"></span></div>';
+      $msgList.appendChild(div);
+      return div;
+    }
 
-    // Auto-focus input
-    msgInput.focus();
+    function confirmPending(delta) {
+      var consumed = new Set();
+      for (var i = 0; i < delta.length; i++) {
+        var m = delta[i];
+        if (m.role !== 'user') continue;
+        var content = m.content || '';
+        var keys = Object.keys(pendingMsgs);
+        for (var k = 0; k < keys.length; k++) {
+          var cid = keys[k];
+          var p = pendingMsgs[cid];
+          if (p.content === content) {
+            clearTimeout(p.timer);
+            p.el.classList.remove('pending');
+            var ts = p.el.querySelector('.ts');
+            if (ts) ts.textContent = formatTime(m.timestamp);
+            delete pendingMsgs[cid];
+            consumed.add(content);
+            break;
+          }
+        }
+      }
+      return consumed;
+    }
+
+    function scrollToBottom() { $msgList.scrollTop = $msgList.scrollHeight; }
+
+    // Search toggle
+    var $searchBtn = document.getElementById('searchBtn');
+    var $searchDropdown = document.getElementById('searchDropdown');
+    $searchBtn.addEventListener('click', function() {
+      var show = !$searchDropdown.classList.contains('show');
+      $searchDropdown.classList.toggle('show', show);
+      $searchBtn.classList.toggle('active', show);
+      if (show) setTimeout(function() { $searchInput.focus(); }, 100);
+      else { $searchInput.value = ''; renderTabs(); }
+    });
+    // Events
+    $searchInput.addEventListener('input', renderTabs);
+    $sendBtn.addEventListener('click', sendMessage);
+    $msgInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); sendMessage(); } });
+    $btnBack.addEventListener('click', function() {
+      if (selectedId) socket.emit('leave-session', selectedId);
+      selectedId = null; hideDetail(); renderTabs();
+    });
+    $btnFocus.addEventListener('click', function() { if (selectedId) socket.emit('focus-session', selectedId); });
+    $btnNewSession.addEventListener('click', function() {
+      socket.emit('new-session', selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
+    });
+    $msgList.addEventListener('scroll', function() { followBottom = ($msgList.scrollHeight - $msgList.scrollTop - $msgList.clientHeight) < 20; });
+
+    // Initial load
+    loadSessionList();
+    if (urlSid) { selectedId = urlSid; showDetail(); loadSessionDetail(urlSid); }
+    } // end setupSocket
+  })();
   </script>
 </body>
 </html>
