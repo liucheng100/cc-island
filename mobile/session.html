@@ -326,6 +326,7 @@
   <script src="/lib/marked/marked.umd.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/mobile/shared.js"></script>
+  <script src="/mobile/session-client.js"></script>
   <script>
   (function() {
     // ===== Auth state =====
@@ -381,54 +382,35 @@
       $pinErr.textContent = '';
       $pinPending.style.display = 'none';
 
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/auth');
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.onload = function() {
-        try {
-          var r = JSON.parse(xhr.responseText);
-          if (r.ok) {
-            accessPin = pin;
-            try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
-            $pinOverlay.style.display = 'none';
-            $appUi.style.display = 'flex';
-            try { history.replaceState({}, '', location.pathname); } catch(e) {}
-            initApp();
-          } else if (r.pending) {
-            $pinPending.style.display = 'block';
-            // Poll for approval
-            var pollTimer = setInterval(function() {
-              var px = new XMLHttpRequest();
-              px.open('POST', '/api/auth');
-              px.setRequestHeader('Content-Type', 'application/json');
-              px.onload = function() {
-                try {
-                  var pr = JSON.parse(px.responseText);
-                  if (pr.ok) {
-                    clearInterval(pollTimer);
-                    accessPin = pin;
-                    try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
-                    $pinOverlay.style.display = 'none';
-                    $appUi.style.display = 'flex';
-                    try { history.replaceState({}, '', location.pathname); } catch(e) {}
-                    initApp();
-                  }
-                } catch(e) {}
-              };
-              px.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
-            }, 3000);
-          } else {
-            if (r.reason === 'pin') { try { localStorage.removeItem('cc-island-pin'); } catch(e) {} }
-            $pinErr.textContent = r.reason === 'pin' ? '密码错误' : r.reason === 'device_rejected' ? '设备未获授权' : '验证失败';
-          }
-        } catch(e) {
-          $pinErr.textContent = '请求失败，请检查网络连接';
+      client.verifyPin(pin, deviceId, navigator.userAgent.substring(0, 50), function(r) {
+        if (!r) { $pinErr.textContent = '请求失败'; return; }
+        if (r.ok) {
+          accessPin = pin;
+          try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+          $pinOverlay.style.display = 'none';
+          $appUi.style.display = 'flex';
+          try { history.replaceState({}, '', location.pathname); } catch(e) {}
+          initApp();
+        } else if (r.pending) {
+          $pinPending.style.display = 'block';
+          var pollTimer = setInterval(function() {
+            client.verifyPin(pin, deviceId, navigator.userAgent.substring(0, 50), function(pr) {
+              if (pr && pr.ok) {
+                clearInterval(pollTimer);
+                accessPin = pin;
+                try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+                $pinOverlay.style.display = 'none';
+                $appUi.style.display = 'flex';
+                try { history.replaceState({}, '', location.pathname); } catch(e) {}
+                initApp();
+              }
+            });
+          }, 3000);
+        } else {
+          if (r.reason === 'pin') { try { localStorage.removeItem('cc-island-pin'); } catch(e) {} }
+          $pinErr.textContent = r.reason === 'pin' ? '密码错误' : r.reason === 'device_rejected' ? '设备未获授权' : '验证失败';
         }
-      };
-      xhr.onerror = function() {
-        $pinErr.textContent = '无法连接到服务器';
-      };
-      xhr.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
+      });
     }
 
     $pinBtn.addEventListener('click', function() {
@@ -452,46 +434,32 @@
     }
 
     // ===== Main App (only after auth) =====
+    var client = new SessionClient();
     function initApp() {
       if (!deviceId || deviceId === 'pending') {
-        // Re-try FPJS
         if (typeof FingerprintJS !== 'undefined') {
           FingerprintJS.load().then(function(fp) { return fp.get(); }).then(function(r) {
             deviceId = r.visitorId;
             localStorage.setItem('cc-island-device-id', deviceId);
-            connectSocket();
+            startClient();
           });
         } else {
           deviceId = 'dev-' + Math.random().toString(36).substring(2, 12);
           localStorage.setItem('cc-island-device-id', deviceId);
-          connectSocket();
+          startClient();
         }
         return;
       }
-      connectSocket();
+      startClient();
     }
 
-    var socket;
-    function connectSocket() {
-      socket = io({ auth: { pin: accessPin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) } });
-      setupSocket();
+    function startClient() {
+      client.connect(accessPin, deviceId, navigator.userAgent.substring(0, 50));
+      setupApp();
     }
 
-    function authGet(url, cb) {
-      var sep = url.indexOf('?') >= 0 ? '&' : '?';
-      var full = url + sep + 'pin=' + encodeURIComponent(accessPin) + '&deviceId=' + encodeURIComponent(deviceId);
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', full);
-      xhr.onload = function() {
-        try { cb(JSON.parse(xhr.responseText)); }
-        catch(e) { cb(null); }
-      };
-      xhr.onerror = function() { cb(null); };
-      xhr.send();
-    }
-
-    // ===== Socket & App =====
-    function setupSocket() {
+    // ===== App (uses SessionClient) =====
+    function setupApp() {
     // DOM
     var $tabList = document.getElementById('tabList');
     var $searchInput = document.getElementById('searchInput');
@@ -526,22 +494,22 @@
     var lastStatus = '';
     var msgCache = {}; // sessionId → { messages, count, hash }
 
-    socket.on('connect', function() {
+    client.on('connect', function() {
       $wsBadge.textContent = '已连接';
       $wsBadge.className = 'pill live';
       loadSessionList();
       if (selectedId) {
-        socket.emit('join-session', selectedId);
+        client.joinSession(selectedId);
         loadSessionDetail(selectedId);
       }
     });
 
-    socket.on('disconnect', function() {
+    client.on('disconnect', function() {
       $wsBadge.textContent = '断开';
       $wsBadge.className = 'pill';
     });
 
-    socket.on('send-error', function(data) {
+    client.on('send-error', function(data) {
       // Session was removed before message could be delivered
       Object.keys(pendingMsgs).forEach(function(cid) {
         var p = pendingMsgs[cid];
@@ -552,7 +520,7 @@
       });
     });
 
-    socket.on('auth-error', function(data) {
+    client.on('auth-error', function(data) {
       accessPin = '';
       try { localStorage.removeItem('cc-island-pin'); } catch(e) {}
       $appUi.style.display = 'none';
@@ -560,9 +528,9 @@
       $pinErr.textContent = data.reason === 'pin' ? '密码已变更，请重新输入' : '设备权限已被撤销';
     });
 
-    socket.on('ping', function() { socket.emit('pong'); });
+    client.on('ping', function() { client.pong(); });
 
-    socket.on('sessions-updated', function(list) {
+    client.on('sessions-updated', function(list) {
       if (!list) return;
       // Compare ID+status hash to detect additions, removals, or status changes
       var prevHash = allSessions.map(function(s){return s.id + ':' + s.status;}).sort().join(',');
@@ -583,7 +551,7 @@
       }
     });
 
-    socket.on('session-messages', function(data) {
+    client.on('session-messages', function(data) {
       if (!data || data.sessionId !== selectedId) return;
       if (data.delta && data.delta.length > 0) {
         var consumed = confirmPending(data.delta);
@@ -604,7 +572,7 @@
       }
     });
 
-    function loadSessionList() { authGet('/api/sessions', function(list) {
+    function loadSessionList() { client.getSessionList(function(list) {
       if (!list) return;
       allSessions = list;
       $cntBadge.textContent = allSessions.length;
@@ -617,7 +585,7 @@
       }
     });}
 
-    function loadSessionDetail(id) { authGet('/api/sessions/' + encodeURIComponent(id), function(detail) {
+    function loadSessionDetail(id) { client.getSessionDetail(id, function(detail) {
       if (!detail || detail.id !== selectedId) return;
       var newCount = detail.messages ? detail.messages.length : 0;
       var cached = msgCache[id];
@@ -683,11 +651,11 @@
 
     function selectSession(id) {
       if (selectedId === id) return;
-      if (selectedId) { inputCache[selectedId] = $msgInput.value; socket.emit('leave-session', selectedId); }
+      if (selectedId) { inputCache[selectedId] = $msgInput.value; client.leaveSession(selectedId); }
       selectedId = id;
       lastStatus = '';
       if (!id) { hideDetail(); renderTabs(); return; }
-      socket.emit('join-session', id);
+      client.joinSession(id);
       showDetail();
       renderTabs();
       $msgList.innerHTML = '';
@@ -730,7 +698,7 @@
         if (pendingMsgs[clientId]) { pendingMsgs[clientId].el.classList.add('fail'); pendingMsgs[clientId].el.classList.remove('pending'); delete pendingMsgs[clientId]; }
       }, 60000);
       pendingMsgs[clientId] = { el: el, content: text, timer: timer };
-      socket.emit('send-message', { sessionId: selectedId, message: text });
+      client.sendMessage(selectedId, text);
       setTimeout(function() { isSending = false; $sendBtn.disabled = false; $msgInput.focus(); }, 600);
     }
 
@@ -784,12 +752,12 @@
     $sendBtn.addEventListener('click', sendMessage);
     $msgInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); sendMessage(); } });
     $btnBack.addEventListener('click', function() {
-      if (selectedId) socket.emit('leave-session', selectedId);
+      if (selectedId) client.leaveSession(selectedId);
       selectedId = null; hideDetail(); renderTabs();
     });
-    $btnFocus.addEventListener('click', function() { if (selectedId) socket.emit('focus-session', selectedId); });
+    $btnFocus.addEventListener('click', function() { if (selectedId) client.focusSession(selectedId); });
     $btnNewSession.addEventListener('click', function() {
-      socket.emit('new-session', selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
+      client.newSession(selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
     });
 
     // === Network latency test (temporary tool) ===
@@ -821,16 +789,26 @@
       xhr.onerror = function() { document.getElementById('netHttpResult').textContent = 'HTTP: 失败'; };
       xhr.send();
 
-      // WebSocket test (true round-trip: client→server→client)
-      document.getElementById('netWsResult').textContent = 'WebSocket: 等待中...';
+      // WebSocket test — new isolated connection, full lifecycle
+      document.getElementById('netWsResult').textContent = 'WebSocket: 连接中...';
       var wsStart = Date.now();
-      var wsHandler = function() {
-        var wsMs = Date.now() - wsStart;
-        document.getElementById('netWsResult').textContent = 'WebSocket: ' + wsMs + 'ms';
-        socket.off('latency-pong', wsHandler);
-      };
-      socket.on('latency-pong', wsHandler);
-      socket.emit('latency-test');
+      var testSocket = io({
+        auth: { pin: accessPin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) },
+        timeout: 30000
+      });
+      testSocket.on('connect', function() {
+        var connectMs = Date.now() - wsStart;
+        testSocket.emit('latency-test');
+        testSocket.on('latency-pong', function() {
+          var totalMs = Date.now() - wsStart;
+          document.getElementById('netWsResult').textContent = 'WebSocket: ' + totalMs + 'ms (连接' + connectMs + 'ms + 往返)';
+          testSocket.close();
+        });
+      });
+      testSocket.on('connect_error', function() {
+        document.getElementById('netWsResult').textContent = 'WebSocket: 连接失败';
+        testSocket.close();
+      });
     });
 
     // === Command Queue ===
@@ -842,7 +820,7 @@
         el.className = 'cmd-queue-item';
         el.innerHTML = '<span>' + escapeHtml(cmd) + '</span><button data-idx="' + i + '">×</button>';
         el.querySelector('button').addEventListener('click', function() {
-          socket.emit('remove-from-queue', { sessionId: selectedId, index: i });
+          client.removeFromQueue(selectedId, i);
         });
         $cmdQueueList.appendChild(el);
       });
@@ -850,15 +828,15 @@
 
     function fetchQueue() {
       if (!selectedId) return;
-      authGet('/api/queue/' + encodeURIComponent(selectedId), function(r) {
+      client.getQueue(selectedId, function(r) {
         if (r && r.queue) renderQueue(r.queue);
       });
     }
-    socket.on('queue-changed', function(data) {
+    client.on('queue-changed', function(data) {
       if (data.sessionId !== selectedId) return;
       fetchQueue();
     });
-    socket.on('queue-data', function(data) {
+    client.on('queue-data', function(data) {
       if (data.sessionId !== selectedId) return;
       renderQueue(data.queue || []);
     });
@@ -866,17 +844,17 @@
     $cmdQueueAddBtn.addEventListener('click', function() {
       var cmd = $cmdQueueInput.value.trim();
       if (!cmd || !selectedId) return;
-      socket.emit('add-to-queue', { sessionId: selectedId, command: cmd });
+      client.addToQueue(selectedId, cmd);
       $cmdQueueInput.value = '';
     });
     $cmdQueueInput.addEventListener('keydown', function(e) {
       if (e.key === 'Enter') $cmdQueueAddBtn.click();
     });
     $cmdQueueClear.addEventListener('click', function() {
-      if (selectedId) socket.emit('clear-queue', selectedId);
+      if (selectedId) client.clearQueue(selectedId);
     });
 
-    socket.on('queue-data', function(data) {
+    client.on('queue-data', function(data) {
       if (data.sessionId !== selectedId) return;
       renderQueue(data.queue || []);
     });

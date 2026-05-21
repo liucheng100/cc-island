@@ -303,6 +303,16 @@ function setupIPC() {
     localServer.on('clear-queue', (sessionId) => {
       if (sessionMonitor) sessionMonitor.clearQueue(sessionId);
     });
+    localServer.on('auth-state-changed', () => {
+      if (localServer.broadcastAuthCheck) localServer.broadcastAuthCheck();
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('auth-state-changed');
+        try {
+          const s = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
+          islandWindow.webContents.send('settings-changed', s);
+        } catch (e) {}
+      }
+    });
   }
 
   // Window drag — use known size to avoid drift/resize from getSize() rounding

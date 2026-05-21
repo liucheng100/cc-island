@@ -23,6 +23,7 @@ class SessionMonitor extends EventEmitter {
     this.commandQueues = new Map(); // sessionKey → string[]
     this._lastAutoSent = new Map(); // sessionKey → timestamp, prevent duplicate auto-send
     this._emptyScanStreak = 0; // count consecutive empty scans
+    this._lastSessionsHash = ''; // track sessions state to skip redundant broadcasts
   }
 
   // === Command Queue ===
@@ -177,7 +178,8 @@ class SessionMonitor extends EventEmitter {
       // Cleanup stale sessions — require 2 consecutive empty scans to prevent false clear
       if (processes.length === 0) {
         this._emptyScanStreak++;
-        if (this._emptyScanStreak < 2) return; // first empty scan: skip cleanup, no emit
+        if (this._emptyScanStreak < 2) return;
+        this._lastSessionsHash = ''; // force broadcast when sessions cleared
       } else {
         this._emptyScanStreak = 0;
       }
@@ -188,7 +190,12 @@ class SessionMonitor extends EventEmitter {
         }
       }
 
-      this.emit('sessions-updated', this.getSessions());
+      const sessions = this.getSessions();
+      const hash = sessions.map(s => s.id + ':' + s.status + ':' + s.messageCount).sort().join(',');
+      if (hash !== this._lastSessionsHash) {
+        this._lastSessionsHash = hash;
+        this.emit('sessions-updated', sessions);
+      }
     } catch (err) {
       console.error('[SessionMonitor] Scan error:', err.message);
     } finally {

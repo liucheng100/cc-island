@@ -358,7 +358,7 @@ class LocalServer extends EventEmitter {
         const pingTimer = setInterval(() => {
           if (!socketAuth(socket)) return;
           socket.emit('ping');
-        }, 5000);
+        }, 1000);
 
         socket.on('pong', () => {
           if (!socketAuth(socket)) return;
@@ -702,9 +702,13 @@ class LocalServer extends EventEmitter {
   }
 
   broadcastSessions(sessions) {
-    this.sessions = sessions;
+    // Strip messages to keep broadcast lightweight
+    this.sessions = sessions.map(s => {
+      const { messages, ...rest } = s;
+      return rest;
+    });
     if (this.io) {
-      this.io.emit('sessions-updated', sessions);
+      this.io.emit('sessions-updated', this.sessions);
     }
   }
 
