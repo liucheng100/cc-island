@@ -3,17 +3,18 @@ const path = require('path');
 
 let tray = null;
 let onToggle = null;
+let islandWindow = null;
 
 function createTrayIcon() {
-  // Create a simple 16x16 tray icon programmatically
   const icon = nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAKBJREFUWEft1sENwjAQRNGxlUAJlEAJlEAJlEAJlEAJlKCUuIhEwB+tiX3GObxptbP6m12vEOLXEYAj/hMwd1sjAF/kOR2gqmq11oCZ2JngU9UH8PECmGTfgJmds7+UBMwEk0QL4Ly3JDOz7CdbAi7i9Qfm3zuXPgHECohBfuU+sK/NHz98Bc8AHJHV85xWQfsAeFCsQUy82X61a/gJAcTwfIP+AI32AAAAAElFTkSuQmCC'
   );
   return icon.resize({ width: 16, height: 16 });
 }
 
-function createTray(toggleCallback) {
+function createTray(toggleCallback, win) {
   onToggle = toggleCallback;
+  islandWindow = win;
 
   tray = new Tray(createTrayIcon());
   tray.setToolTip('CC Island - Claude Code 灵动岛');
@@ -29,13 +30,17 @@ function createTray(toggleCallback) {
     {
       label: '设置',
       click: () => {
-        // Settings window can be added here
+        if (islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('open:settings');
+        }
       },
     },
     { type: 'separator' },
     {
       label: '退出 CC Island',
       click: () => {
+        // Need to signal main process that we're quitting intentionally
+        const { ipcMain } = require('electron');
         app.quit();
       },
     },

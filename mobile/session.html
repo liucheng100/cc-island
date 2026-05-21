@@ -189,6 +189,28 @@
       transition: all 0.15s; flex-shrink: 0;
     }
     .btn-new-session:active { background: rgba(99,102,241,0.2); color: var(--accent); }
+    /* Command Queue */
+    .cmd-queue { flex-shrink: 0; background: var(--bg2); border-top: 1px solid var(--border); padding: 6px 12px; }
+    .cmd-queue-hdr { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--text2); margin-bottom: 4px; }
+    .cmd-queue-clear { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 9px; }
+    .cmd-queue-clear:hover { color: var(--danger); }
+    .cmd-queue-list { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; }
+    .cmd-queue-item {
+      display: flex; align-items: center; gap: 3px;
+      padding: 2px 8px; background: rgba(99,102,241,0.08); border-radius: 10px;
+      font-size: 10px; color: var(--text);
+    }
+    .cmd-queue-item span { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmd-queue-item button { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 11px; padding: 0 2px; }
+    .cmd-queue-add { display: flex; gap: 4px; }
+    .cmd-queue-add input {
+      flex: 1; min-width: 0; padding: 4px 8px; border-radius: 10px;
+      background: var(--bg3); border: 1px solid var(--border); font-size: 11px; color: var(--text); outline: none;
+    }
+    .cmd-queue-add button {
+      background: var(--accent); border: none; border-radius: 10px;
+      color: #fff; font-size: 12px; padding: 4px 10px; cursor: pointer;
+    }
     /* === PIN overlay === */
     .pin-overlay {
       position: fixed; inset: 0; background: var(--bg);
@@ -284,6 +306,17 @@
     <div class="input-bar" id="inputBar" style="display:none">
       <input type="text" id="msgInput" placeholder="输入指令..." />
       <button class="btn-send" id="sendBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+    </div>
+    <div class="cmd-queue" id="cmdQueue" style="display:none">
+      <div class="cmd-queue-hdr" id="cmdQueueHdr">
+        <span>指令队列 (<span id="cmdQueueCount">0</span>)</span>
+        <button class="cmd-queue-clear" id="cmdQueueClear">清空</button>
+      </div>
+      <div class="cmd-queue-list" id="cmdQueueList"></div>
+      <div class="cmd-queue-add">
+        <input type="text" id="cmdQueueInput" placeholder="添加指令..." />
+        <button id="cmdQueueAddBtn">+</button>
+      </div>
     </div>
   </div>
   </div>
@@ -474,6 +507,12 @@
     var $btnBack = document.getElementById('btnBack');
     var $btnFocus = document.getElementById('btnFocus');
     var $btnNewSession = document.getElementById('btnNewSession');
+    var $cmdQueue = document.getElementById('cmdQueue');
+    var $cmdQueueCount = document.getElementById('cmdQueueCount');
+    var $cmdQueueList = document.getElementById('cmdQueueList');
+    var $cmdQueueInput = document.getElementById('cmdQueueInput');
+    var $cmdQueueAddBtn = document.getElementById('cmdQueueAddBtn');
+    var $cmdQueueClear = document.getElementById('cmdQueueClear');
 
     var allSessions = [];
     var selectedId = null;
@@ -612,11 +651,8 @@
     function addThinkDot(s) {
       var st = s ? s.status : '';
       var old = $msgList.querySelector('.think');
-      // Status unchanged but dots exist — just move to bottom
-      if (st === lastStatus && old) {
-        $msgList.appendChild(old);
-        return;
-      }
+      // Status unchanged, dots exist and at bottom — skip
+      if (st === lastStatus && old && old === $msgList.lastElementChild) return;
       if (old) old.remove();
       lastStatus = st;
       if (st === 'thinking' || st === 'answering') {
@@ -667,8 +703,8 @@
       loadSessionDetail(id);
     }
 
-    function showDetail() { $emptyState.style.display = 'none'; $detailHdr.style.display = 'flex'; $msgList.style.display = 'flex'; $inputBar.style.display = 'flex'; setTimeout(function(){ $msgInput.focus(); }, 100); }
-    function hideDetail() { $emptyState.style.display = 'flex'; $detailHdr.style.display = 'none'; $msgList.style.display = 'none'; $inputBar.style.display = 'none'; $msgList.innerHTML = ''; lastStatus = ''; }
+    function showDetail() { $emptyState.style.display = 'none'; $detailHdr.style.display = 'flex'; $msgList.style.display = 'flex'; $inputBar.style.display = 'flex'; $cmdQueue.style.display = 'block'; setTimeout(function(){ $msgInput.focus(); }, 100); }
+    function hideDetail() { $emptyState.style.display = 'flex'; $detailHdr.style.display = 'none'; $msgList.style.display = 'none'; $inputBar.style.display = 'none'; $cmdQueue.style.display = 'none'; $msgList.innerHTML = ''; lastStatus = ''; }
 
     function updateDetailHeader(s) {
       $detailName.textContent = s.name || 'Claude';
@@ -754,7 +790,71 @@
     $btnNewSession.addEventListener('click', function() {
       socket.emit('new-session', selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
     });
+
+    // === Command Queue ===
+    var renderQueue = function(q) {
+      $cmdQueueCount.textContent = q.length;
+      $cmdQueueList.innerHTML = '';
+      q.forEach(function(cmd, i) {
+        var el = document.createElement('div');
+        el.className = 'cmd-queue-item';
+        el.innerHTML = '<span>' + escapeHtml(cmd) + '</span><button data-idx="' + i + '">×</button>';
+        el.querySelector('button').addEventListener('click', function() {
+          socket.emit('remove-from-queue', { sessionId: selectedId, index: i });
+        });
+        $cmdQueueList.appendChild(el);
+      });
+    };
+
+    function fetchQueue() {
+      if (!selectedId) return;
+      authGet('/api/queue/' + encodeURIComponent(selectedId), function(r) {
+        if (r && r.queue) renderQueue(r.queue);
+      });
+    }
+    socket.on('queue-changed', function(data) {
+      if (data.sessionId !== selectedId) return;
+      fetchQueue();
+    });
+    socket.on('queue-data', function(data) {
+      if (data.sessionId !== selectedId) return;
+      renderQueue(data.queue || []);
+    });
+
+    $cmdQueueAddBtn.addEventListener('click', function() {
+      var cmd = $cmdQueueInput.value.trim();
+      if (!cmd || !selectedId) return;
+      socket.emit('add-to-queue', { sessionId: selectedId, command: cmd });
+      $cmdQueueInput.value = '';
+    });
+    $cmdQueueInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') $cmdQueueAddBtn.click();
+    });
+    $cmdQueueClear.addEventListener('click', function() {
+      if (selectedId) socket.emit('clear-queue', selectedId);
+    });
+
+    socket.on('queue-data', function(data) {
+      if (data.sessionId !== selectedId) return;
+      renderQueue(data.queue || []);
+    });
+
+    // Load queue on tab switch via HTTP
+    var origSelectSession = selectSession;
+    selectSession = function(id) {
+      origSelectSession(id);
+      if (id) fetchQueue();
+    };
     $msgList.addEventListener('scroll', function() { followBottom = ($msgList.scrollHeight - $msgList.scrollTop - $msgList.clientHeight) < 20; });
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(function() {
+        if (followBottom) scrollToBottom();
+      });
+      ro.observe($msgList);
+    }
+    window.addEventListener('resize', function() {
+      if (followBottom) scrollToBottom();
+    });
 
     // Initial load
     loadSessionList();

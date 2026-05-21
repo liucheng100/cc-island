@@ -1,5 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import StatusIndicator from './StatusIndicator';
+import { marked } from 'marked';
+
+// Configure marked for safe inline rendering
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  const html = marked.parse(text);
+  // Strip wrapping <p> tags for inline display
+  return html.replace(/^<p>|<\/p>\n?$/g, '');
+}
 
 function formatDuration(s) {
   if (!s || s < 0) return '刚刚开始';
@@ -13,18 +24,45 @@ function formatTime(iso) {
   return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SessionCard({ session, onShowQR, onSendMessage, onFocusCMD }) {
+export default function SessionCard({ session, onShowQR, onSendMessage, onFocusCMD, onFocusChange }) {
   const [expanded, setExpanded] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState(null);
+  const msgListRef = useRef(null);
+  const prevExpandedRef = useRef(false);
 
-  const recentMessages = session.messages ? session.messages.slice(-8) : [];
-  const isActive = session.status === 'working' || session.status === 'thinking';
+  const recentMessages = session.messages ? session.messages.slice(-20) : [];
+  const isActive = session.status !== 'disconnected' && session.status !== 'error';
+
+  useEffect(() => {
+    if (expanded && msgListRef.current) {
+      const el = msgListRef.current;
+      const isFirstExpand = !prevExpandedRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+      if (isFirstExpand || isNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+    prevExpandedRef.current = expanded;
+  }, [expanded, session.messages]);
 
   const handleSend = async () => {
     if (!inputValue.trim() || isSending) return;
     setIsSending(true);
-    try { await onSendMessage(session.id, inputValue.trim()); setInputValue(''); } catch (e) {}
+    setSendError(null);
+    try {
+      const result = await onSendMessage(session.id, inputValue.trim());
+      if (result && result.success) {
+        setInputValue('');
+      } else {
+        setSendError((result && result.error) || '发送失败');
+        setTimeout(() => setSendError(null), 4000);
+      }
+    } catch (e) {
+      setSendError('发送出错: ' + e.message);
+      setTimeout(() => setSendError(null), 4000);
+    }
     setIsSending(false);
   };
 
@@ -66,11 +104,11 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
       {expanded && (
         <div className="card-body">
           {recentMessages.length > 0 ? (
-            <div className="message-list">
+            <div className="message-list" ref={msgListRef}>
               {recentMessages.map((msg, i) => (
                 <div key={i} className={`message msg-${msg.role}`}>
                   <span className="msg-role">{msg.role === 'user' ? '你' : 'Claude'}</span>
-                  <span className="msg-content">{msg.content}</span>
+                  <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                   <span className="msg-time">{formatTime(msg.timestamp)}</span>
                 </div>
               ))}
@@ -82,21 +120,42 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
             <input type="text" className="msg-input" placeholder={isActive ? '输入指令...' : '会话已结束'}
               value={inputValue} onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSend(); } }}
+              onFocus={() => onFocusChange && onFocusChange(true)}
+              onBlur={() => onFocusChange && onFocusChange(false)}
               disabled={!isActive || isSending} />
             <button className="btn-send" onClick={handleSend} disabled={!isActive || !inputValue.trim() || isSending}>
               {isSending ? '...' : '发送'}
             </button>
           </div>
+          {sendError && <div className="send-error">{sendError}</div>}
         </div>
       )}
 
       <style>{`
-        .session-card { background: var(--bg-card); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); overflow: hidden; transition: all var(--transition); animation: slide-in 0.3s ease-out; }
-        .session-card:hover { border-color: var(--border-active); }
+        .session-card {
+          position: relative;
+          background: linear-gradient(135deg, rgba(38,38,48,0.7), rgba(28,28,36,0.6));
+          border-radius: var(--radius-md);
+          border: 1px solid rgba(255,255,255,0.05);
+          overflow: hidden;
+          transition: all var(--transition);
+          animation: slide-in 0.3s ease-out;
+        }
+        .session-card::before {
+          content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%;
+          border-radius: var(--radius-md) 0 0 var(--radius-md);
+          transition: all 0.3s ease;
+        }
+        .session-card:hover { border-color: rgba(255,255,255,0.1); box-shadow: 0 2px 12px rgba(0,0,0,0.2); }
         .session-card.status-working { border-left: 3px solid #6366f1; }
-        .session-card.status-completed { border-left: 3px solid #22c55e; }
-        .session-card.status-error { border-left: 3px solid #ef4444; }
+        .session-card.status-working:hover { box-shadow: 0 2px 16px rgba(99,102,241,0.12); }
         .session-card.status-thinking { border-left: 3px solid #f59e0b; }
+        .session-card.status-thinking:hover { box-shadow: 0 2px 16px rgba(245,158,11,0.12); }
+        .session-card.status-answering { border-left: 3px solid #3b82f6; }
+        .session-card.status-answering:hover { box-shadow: 0 2px 16px rgba(59,130,246,0.12); }
+        .session-card.status-completed { border-left: 3px solid #22c55e; opacity: 0.8; }
+        .session-card.status-error { border-left: 3px solid #ef4444; }
+        .session-card.status-error:hover { box-shadow: 0 2px 16px rgba(239,68,68,0.12); }
         .card-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; user-select: none; }
         .card-header-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
         .card-title { display: flex; flex-direction: column; min-width: 0; }
@@ -116,6 +175,19 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
         .msg-assistant { background: rgba(255,255,255,0.03); border-left: 2px solid var(--text-muted); }
         .msg-role { font-size: 9px; font-weight: 600; color: var(--text-muted); }
         .msg-content { color: var(--text-primary); word-break: break-word; }
+        .msg-content strong { color: #f0f0f5; font-weight: 700; }
+        .msg-content em { font-style: italic; color: #d0d0e0; }
+        .msg-content code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 10px; }
+        .msg-content pre { background: rgba(0,0,0,0.3); padding: 6px 10px; border-radius: 6px; overflow-x: auto; margin: 4px 0; }
+        .msg-content pre code { background: none; padding: 0; }
+        .msg-content ul, .msg-content ol { margin: 2px 0; padding-left: 16px; }
+        .msg-content li { margin: 1px 0; }
+        .msg-content blockquote { border-left: 2px solid var(--border-active); padding-left: 8px; margin: 4px 0; color: var(--text-secondary); }
+        .msg-content h1, .msg-content h2, .msg-content h3 { font-size: 12px; font-weight: 700; margin: 4px 0 2px; }
+        .msg-content a { color: var(--accent); }
+        .msg-content hr { border: none; border-top: 1px solid var(--border-subtle); margin: 4px 0; }
+        .msg-content table { border-collapse: collapse; font-size: 10px; }
+        .msg-content th, .msg-content td { border: 1px solid var(--border-subtle); padding: 2px 6px; }
         .msg-time { font-size: 9px; color: var(--text-muted); text-align: right; }
         .no-messages { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
         .card-input { display: flex; gap: 6px; }
@@ -125,6 +197,7 @@ export default function SessionCard({ session, onShowQR, onSendMessage, onFocusC
         .btn-send { background: var(--accent); border: none; border-radius: var(--radius-sm); padding: 7px 14px; font-size: 12px; font-weight: 600; color: white; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
         .btn-send:hover:not(:disabled) { background: #5558e6; }
         .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+        .send-error { margin-top: 6px; padding: 6px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: var(--radius-sm); font-size: 11px; color: #ef4444; animation: slide-in 0.2s ease-out; }
       `}</style>
     </div>
   );

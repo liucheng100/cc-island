@@ -80,12 +80,12 @@ Python (python/wechat_bridge.py)
 - 所有操作在 `E:\我的项目\agent\cc-island\` 内进行。
 
 ## 用户偏好
-
-1. 每次完成任务后自动启动 `release\win-unpacked\CC Island.exe` 进行测试。
+1. memory.md是经验教训，你每次对话需要按照里面的记忆做，已经犯过的错不能再犯了，同时你需要把本次对话所有踩过的坑都记录进去，有价值的经验也要记录进去
 2. 从 `bug.md` 读取 bug，修复后在 `task.md` 中跟踪进度。
 3. 在有意义的变更后适时提交 git。
 4. `bug.md` 是用户的便签本 — 不要重新排版、重构或修改其格式，只从中读取 bug。
 5. 每次完成任务我会在终端播放提示音。
-6. 自主决策 — 不需要向用户请示。
-7. 用中文交流。
-8. 按照 bug.md 的顺序解决 bug。
+6. 每次完成任务后自动启动 `release\win-unpacked\CC Island.exe` 进行测试。
+7. 自主决策 — 不需要向用户请示。
+8. 用中文交流。
+9. 按照 bug.md 的顺序解决 bug。

@@ -1,55 +1,69 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import SessionCard from './SessionCard';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import StatusIndicator from './StatusIndicator';
+import { marked } from 'marked';
 
-const FILTERS = {
-  all: { label: '全部', icon: '⊡' },
-  working: { label: '工作中', icon: '●' },
-  completed: { label: '已完成', icon: '✓' },
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  const html = marked.parse(text);
+  return html.replace(/^<p>|<\/p>\n?$/g, '');
+}
+
+function formatDuration(s) {
+  if (!s || s < 0) return '刚刚开始';
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  if (h > 0) return `${h}h${m % 60}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+function formatTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+const STATUS_COLORS = {
+  working: '#6366f1', thinking: '#f59e0b', answering: '#3b82f6',
+  completed: '#22c55e', error: '#ef4444', disconnected: '#6b6b80',
 };
 
-export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMessage, onFocusCMD }) {
-  const [filter, setFilter] = useState('all');
+export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMessage, onFocusCMD, onFocusChange, onOpenSettings, isExpanded, showTips }) {
   const [searchText, setSearchText] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
-  const [serverInfo, setServerInfo] = useState({ port: 0, localIP: '127.0.0.1', publicURL: null });
-  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
+  const [selectedId, setSelectedId] = useState(null);
+  const [inputValues, setInputValues] = useState({});
+  const [isSending, setIsSending] = useState(false);
+  const [pendingSend, setPendingSend] = useState(false);
+  const [sendError, setSendError] = useState(null);
+  const [optimisticMsg, setOptimisticMsg] = useState(null); // { text, ts } shown instantly
+  const [cmdQueue, setCmdQueue] = useState([]);
+  const [queueInput, setQueueInput] = useState('');
+  const [showQueue, setShowQueue] = useState(false);
+  const [tabOrder, setTabOrder] = useState(() => {
+    try {
+      const saved = localStorage.getItem('cc-island-tab-order');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const dragOverTabRef = useRef(false);
+  const msgListRef = useRef(null);
+  const prevSelectedRef = useRef(null);
+  const containerRef = useRef(null);
+  const inputRef = useRef(null);
+  const followModeRef = useRef(true);
 
-  useEffect(() => {
-    if (window.ccIsland) window.ccIsland.getServerInfo().then(setServerInfo);
-  }, []);
-
-  // JS-based drag for the session list window via header
-  const handleHeaderDown = useCallback((e) => {
-    dragRef.current = { dragging: true, startX: e.screenX, startY: e.screenY, moved: false };
-    setIsDragging(true);
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e) => {
-      if (!dragRef.current.dragging) return;
-      const dx = e.screenX - dragRef.current.startX;
-      const dy = e.screenY - dragRef.current.startY;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragRef.current.moved = true;
-      if (dragRef.current.moved && window.ccIsland) {
-        window.ccIsland.moveWindow(dx, dy);
-        dragRef.current.startX = e.screenX;
-        dragRef.current.startY = e.screenY;
-      }
-    };
-    const onUp = () => {
-      dragRef.current.dragging = false;
-      setIsDragging(false);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, []);
+  const orderedIds = useMemo(() => {
+    const currentIds = sessions.map(s => s.id);
+    const validOrder = tabOrder.filter(id => currentIds.includes(id));
+    const newIds = currentIds.filter(id => !validOrder.includes(id));
+    const result = [...validOrder, ...newIds];
+    try { localStorage.setItem('cc-island-tab-order', JSON.stringify(result)); } catch {}
+    return result;
+  }, [sessions, tabOrder]);
 
   const filteredSessions = useMemo(() => {
     let result = sessions;
-    if (filter !== 'all') {
-      result = result.filter((s) => s.status === filter);
-    }
     if (searchText.trim()) {
       const lower = searchText.toLowerCase();
       result = result.filter(
@@ -58,39 +72,257 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           (s.cwd && s.cwd.toLowerCase().includes(lower))
       );
     }
+    const orderMap = {};
+    orderedIds.forEach((id, i) => { orderMap[id] = i; });
+    result = [...result].sort((a, b) => (orderMap[a.id] ?? 999) - (orderMap[b.id] ?? 999));
     return result;
-  }, [sessions, filter, searchText]);
+  }, [sessions, searchText, orderedIds]);
 
-  const counts = useMemo(() => {
-    return {
-      all: sessions.length,
-      working: sessions.filter((s) => s.status === 'working' || s.status === 'thinking').length,
-      completed: sessions.filter((s) => s.status === 'completed').length,
-    };
-  }, [sessions]);
+  // Auto-select first session when filtered list changes
+  useEffect(() => {
+    if (filteredSessions.length > 0) {
+      setSelectedId((prev) => {
+        if (prev && filteredSessions.find((s) => s.id === prev)) return prev;
+        return filteredSessions[0].id;
+      });
+    } else {
+      setSelectedId(null);
+    }
+  }, [filteredSessions]);
+
+  const selectedSession = useMemo(
+    () => filteredSessions.find((s) => s.id === selectedId) || null,
+    [filteredSessions, selectedId]
+  );
+
+  const cycleTab = useCallback((direction) => {
+    if (filteredSessions.length === 0) return;
+    const idx = filteredSessions.findIndex((s) => s.id === selectedId);
+    const next = idx < 0 ? 0 : (idx + direction + filteredSessions.length) % filteredSessions.length;
+    setSelectedId(filteredSessions[next].id);
+  }, [filteredSessions, selectedId]);
+
+  // Clear pendingSend when Claude starts processing, or on tab switch
+  useEffect(() => {
+    if (!selectedSession) return;
+    if (selectedSession.status === 'thinking' || selectedSession.status === 'answering' || selectedSession.status === 'completed') {
+      setPendingSend(false);
+    }
+  }, [selectedSession?.status, selectedId]);
+
+  const scrollToBottom = () => {
+    const el = msgListRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    followModeRef.current = true;
+  };
+
+  const handleMsgScroll = () => {
+    const el = msgListRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    followModeRef.current = distFromBottom < 10;
+  };
+
+  // ResizeObserver: when DOM inside messages changes and we're in follow mode, stick to bottom
+  useEffect(() => {
+    const el = msgListRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (followModeRef.current && el) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [selectedId]);
+
+  // Scroll to bottom on first select + focus input
+  useEffect(() => {
+    if (selectedId && selectedId !== prevSelectedRef.current) {
+      scrollToBottom();
+      if (inputRef.current) inputRef.current.focus();
+      setPendingSend(false);
+    }
+    prevSelectedRef.current = selectedId;
+  }, [selectedId]);
+
+  // Scroll to bottom when island expands
+  useEffect(() => {
+    if (isExpanded && msgListRef.current) {
+      scrollToBottom();
+    }
+  }, [isExpanded]);
+
+  const recentMessages = (() => {
+    const base = selectedSession?.messages ? selectedSession.messages.slice(-20) : [];
+    if (optimisticMsg && optimisticMsg.content) {
+      // Only show optimistic if last real user msg doesn't match
+      const lastUser = [...base].reverse().find(m => m.role === 'user');
+      if (!lastUser || lastUser.content !== optimisticMsg.content) {
+        return [...base, { ...optimisticMsg, role: 'user', _optimistic: true }];
+      }
+    }
+    return base;
+  })();
+  const isActive = selectedSession && selectedSession.status !== 'disconnected' && selectedSession.status !== 'error';
+
+  // Load command queue when selected session changes
+  useEffect(() => {
+    if (!selectedId || !window.ccIsland) { setCmdQueue([]); return; }
+    window.ccIsland.getQueue(selectedId).then(q => setCmdQueue(q || []));
+    const unsub = window.ccIsland.onQueueUpdated((data) => {
+      if (data.sessionId === selectedId) setCmdQueue(data.queue || []);
+    });
+    return () => { if (unsub) unsub(); };
+  }, [selectedId]);
+
+  // Clear optimistic message when server confirms (via sessions update)
+  useEffect(() => {
+    if (!optimisticMsg || !selectedSession?.messages) return;
+    const lastUser = [...selectedSession.messages].reverse().find(m => m.role === 'user');
+    if (lastUser && lastUser.content === optimisticMsg.content && !lastUser._optimistic) {
+      setOptimisticMsg(null);
+    }
+  }, [selectedSession?.messages, optimisticMsg]);
+
+  // Auto-scroll when in follow mode and content changes
+  useEffect(() => {
+    if (followModeRef.current) {
+      scrollToBottom();
+    }
+  }, [recentMessages.length, selectedSession?.status, isSending, pendingSend]);
+
+  const curInput = inputValues[selectedId] || '';
+
+  const handleSend = useCallback(async () => {
+    if (!curInput.trim() || isSending || !selectedSession) return;
+    const text = curInput.trim();
+    // Optimistic: clear input + inject message immediately with loading state
+    setInputValues((prev) => ({ ...prev, [selectedSession.id]: '' }));
+    setIsSending(true);
+    setPendingSend(true);
+    setSendError(null);
+    // Optimistic: show message instantly with loading indicator
+    setOptimisticMsg({ content: text, timestamp: new Date().toISOString() });
+    try {
+      const result = await onSendMessage(selectedSession.id, text);
+      if (!result || !result.success) {
+        // Failed — remove optimistic message, show error
+        setOptimisticMsg(null);
+        setSendError((result && result.error) || '发送失败');
+        setTimeout(() => setSendError(null), 4000);
+      }
+      // On success: optimistic msg cleared when sessions-updated delivers the confirmed msg
+    } catch (e) {
+      setOptimisticMsg(null);
+      setSendError('发送出错: ' + e.message);
+      setTimeout(() => setSendError(null), 4000);
+    }
+    setIsSending(false);
+    setPendingSend(false);
+  }, [curInput, isSending, selectedSession, onSendMessage]);
+
+  // Drag-and-drop handlers
+  const handleDragStart = useCallback((e, id) => {
+    setDragId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  }, []);
+
+  const handleDragOver = useCallback((e, id) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverId(id);
+    dragOverTabRef.current = true;
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDragOverId(null);
+    dragOverTabRef.current = false;
+  }, []);
+
+  const handleDrop = useCallback((e, targetId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceId = dragId;
+    setDragId(null);
+    setDragOverId(null);
+    dragOverTabRef.current = false;
+    if (!sourceId || sourceId === targetId) return;
+    setTabOrder((prev) => {
+      const currentIds = sessions.map(s => s.id);
+      const validOrder = prev.filter(id => currentIds.includes(id));
+      const newIds = currentIds.filter(id => !validOrder.includes(id));
+      let fullOrder = [...validOrder, ...newIds];
+      const srcIdx = fullOrder.indexOf(sourceId);
+      const tgtIdx = fullOrder.indexOf(targetId);
+      if (srcIdx === -1 || tgtIdx === -1) return prev;
+      fullOrder.splice(srcIdx, 1);
+      const adjustedTgt = fullOrder.indexOf(targetId);
+      fullOrder.splice(adjustedTgt, 0, sourceId);
+      return fullOrder;
+    });
+  }, [dragId, sessions]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragId(null);
+    setDragOverId(null);
+    dragOverTabRef.current = false;
+  }, []);
+
+  const handleContainerDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const handleContainerDrop = useCallback((e) => {
+    e.preventDefault();
+    if (dragOverTabRef.current) return;
+    const sourceId = dragId;
+    setDragId(null);
+    if (!sourceId) return;
+    setTabOrder((prev) => {
+      const currentIds = sessions.map(s => s.id);
+      const newOrder = prev.filter(id => currentIds.includes(id) && id !== sourceId);
+      newOrder.push(sourceId);
+      return newOrder;
+    });
+  }, [dragId, sessions]);
 
   return (
-    <div className={`session-list ${isDragging ? 'dragging' : ''}`}>
-      {/* Header */}
-      <div className="list-header">
-        <div className="list-header-top" onMouseDown={handleHeaderDown} style={{ cursor: 'grab' }}>
-          <h2 className="list-title">Claude Code 灵动岛</h2>
-          <div className="header-actions">
-            <div className="server-info-badge" title={`${serverInfo.localIP}:${serverInfo.port}`}>
-              <span className="server-port">:{serverInfo.port}</span>
+    <div className="session-list" ref={containerRef} tabIndex={-1} onKeyDown={(e) => {
+      if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); }
+    }}>
+      {/* Top bar — session header + search */}
+      <div className="top-bar">
+        {selectedSession && (
+          <div className="conv-header">
+            <div className="conv-header-info">
+              <StatusIndicator status={selectedSession.status} />
+              <span className="conv-name">{selectedSession.name}</span>
+              <span className="conv-duration">{formatDuration(selectedSession.workingDuration)}</span>
             </div>
-            <div className={`wechat-status-badge ${wechatStatus.connected ? 'connected' : ''}`}>
-              <span className="wechat-dot" />
-              <span className="wechat-text">
-                {wechatStatus.connected ? '微信已连接' : '微信未连接'}
-              </span>
+            <div className="conv-header-actions">
+              {isActive && (
+                <button className="btn-focus" onClick={() => onFocusCMD(selectedSession.id)} title="弹出 CMD 窗口">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />
+                  </svg>
+                </button>
+              )}
+              <button className="btn-qr" onClick={() => onShowQR(selectedSession)} title="微信扫码">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+                  <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+                </svg>
+              </button>
             </div>
           </div>
-        </div>
-
-        {/* Search */}
+        )}
         <div className="search-box">
-          <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg className="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
           </svg>
@@ -101,234 +333,450 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
-        </div>
-
-        {/* Filters */}
-        <div className="filter-tabs">
-          {Object.entries(FILTERS).map(([key, { label, icon }]) => (
-            <button
-              key={key}
-              className={`filter-tab ${filter === key ? 'active' : ''}`}
-              onClick={() => setFilter(key)}
-            >
-              <span>{icon}</span>
-              <span>{label}</span>
-              <span className="filter-count">{counts[key]}</span>
+          <button className="btn-settings" onClick={() => {
+            if (window.ccIsland) window.ccIsland.newClaudeSession().catch(() => {});
+          }} title="新建 Claude 会话">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          {onOpenSettings && (
+            <button className="btn-settings" onClick={() => onOpenSettings()} title="设置">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+              </svg>
             </button>
-          ))}
+          )}
         </div>
       </div>
 
-      {/* Session Cards */}
-      <div className="list-body">
-        {filteredSessions.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 2a10 10 0 100 20 10 10 0 000-20z" />
-                <path d="M8 12h8M12 8v8" />
-              </svg>
+      {/* Main area — left tabs + right messages */}
+      <div className="main-area">
+        <div className="sidebar-left" onClick={() => containerRef.current?.focus()}>
+          {isExpanded && showTips && <span className="kb-tip tip-tab">Tab 切换对话</span>}
+          <div className="tab-list" onDragOver={handleContainerDragOver} onDrop={handleContainerDrop}>
+            {filteredSessions.map((s) => {
+              const srcMatch = s.name.match(/^\[([^\]]+)\]\s*(.*)/);
+              const source = srcMatch ? srcMatch[1] : '';
+              const lastUserMsg = s.messages ? [...s.messages].reverse().find(m => m.role === 'user') : null;
+              const firstLine = lastUserMsg ? lastUserMsg.content.replace(/<[^>]+>/g, '').substring(0, 30) : (srcMatch ? srcMatch[2] : s.name);
+              const dirName = s.cwd ? s.cwd.split('\\').pop() || s.cwd.split('/').pop() || '' : '';
+              return (
+                <div
+                  key={s.id}
+                  className={`session-tab ${s.id === selectedId ? 'active' : ''} status-${s.status}${dragId === s.id ? ' dragging' : ''}${dragOverId === s.id ? ' drag-over' : ''}`}
+                  onClick={() => setSelectedId(s.id)}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, s.id)}
+                  onDragOver={(e) => handleDragOver(e, s.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, s.id)}
+                  onDragEnd={handleDragEnd}
+                >
+                  <span className="tab-dot" style={{ backgroundColor: STATUS_COLORS[s.status] || STATUS_COLORS.disconnected }} />
+                  <div className="tab-text">
+                    <span className="tab-name">{firstLine}</span>
+                    <span className="tab-sub">{dirName}</span>
+                    <span className="tab-source">{source}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredSessions.length === 0 && (
+              <div className="tab-empty">无匹配会话</div>
+            )}
+          </div>
+        </div>
+
+        <div className="panel-right">
+          {selectedSession ? (
+            <>
+              <div className="conv-messages" ref={msgListRef} onScroll={handleMsgScroll}>
+                {recentMessages.length > 0 ? (
+                  recentMessages.map((msg, i) => {
+                    const isUser = msg.role === 'user';
+                    const isLastUser = isUser && i === recentMessages.length - 1;
+                    const showLoading = isLastUser && (isSending || pendingSend);
+                    return (
+                      <div key={i} className={`msg-row ${isUser ? 'msg-row-user' : 'msg-row-claude'}`}>
+                        <div className={`msg-bubble ${isUser ? 'bubble-user' : 'bubble-claude'}`}>
+                          <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                          <div className="msg-footer">
+                            <span className="msg-time">{formatTime(msg.timestamp)}</span>
+                            {showLoading && <span className="msg-loading" />}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  !isActive ? <div className="no-messages">暂无对话记录</div> : null
+                )}
+                {(selectedSession.status === 'thinking' || selectedSession.status === 'answering') && (
+                  <div className="thinking-dots"><i>.</i><i>.</i><i>.</i></div>
+                )}
+              </div>
+              <div className="conv-input">
+                {isExpanded && showTips && <span className="kb-tip tip-enter">Enter 发送</span>}
+                <input
+                  ref={inputRef}
+                  type="text"
+                  className="msg-input"
+                  placeholder={isActive ? '输入指令...' : '会话已结束'}
+                  value={curInput}
+                  onChange={(e) => setInputValues((prev) => ({ ...prev, [selectedSession.id]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSend(); } }}
+                  onFocus={() => onFocusChange && onFocusChange(true)}
+                  onBlur={() => onFocusChange && onFocusChange(false)}
+                  disabled={!isActive || isSending}
+                />
+                <button className="btn-send" onClick={handleSend} disabled={!isActive || !curInput.trim() || isSending}>
+                  发送
+                </button>
+              </div>
+              {sendError && <div className="send-error">{sendError}</div>}
+              {/* Command Queue */}
+              <div className="cmd-queue">
+                <div className="cmd-queue-toggle" onClick={() => setShowQueue(!showQueue)}>
+                  <span>指令队列 ({cmdQueue.length})</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: showQueue ? 'rotate(180deg)' : '' }}>
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </div>
+                {showQueue && (
+                  <div className="cmd-queue-body">
+                    {cmdQueue.map((cmd, i) => (
+                      <div key={i} className="cmd-queue-item">
+                        <span className="cmd-queue-text">{cmd}</span>
+                        <button className="cmd-queue-del" onClick={() => window.ccIsland && window.ccIsland.removeFromQueue(selectedId, i)}>×</button>
+                      </div>
+                    ))}
+                    <div className="cmd-queue-add">
+                      <input
+                        value={queueInput}
+                        onChange={(e) => setQueueInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && queueInput.trim()) {
+                            if (window.ccIsland) window.ccIsland.addToQueue(selectedId, queueInput.trim());
+                            setQueueInput('');
+                          }
+                        }}
+                        placeholder="添加指令..."
+                      />
+                      <button onClick={() => {
+                        if (!queueInput.trim()) return;
+                        if (window.ccIsland) window.ccIsland.addToQueue(selectedId, queueInput.trim());
+                        setQueueInput('');
+                      }}>+</button>
+                    </div>
+                    {cmdQueue.length > 0 && (
+                      <button className="cmd-queue-clear" onClick={() => window.ccIsland && window.ccIsland.clearQueue(selectedId)}>清空队列</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="conv-empty">
+              <div className="empty-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M12 2a10 10 0 100 20 10 10 0 000-20z" /><path d="M8 12h8M12 8v8" />
+                </svg>
+              </div>
+              <p>{sessions.length === 0 ? '暂无活跃的 Claude 会话' : '选择左侧会话查看详情'}</p>
             </div>
-            <p className="empty-title">
-              {sessions.length === 0 ? '暂无活跃的 Claude 会话' : '没有匹配的会话'}
-            </p>
-            <p className="empty-desc">
-              {sessions.length === 0
-                ? '启动 Claude Code 后，会话将自动出现在这里'
-                : '尝试更改筛选条件'}
-            </p>
-          </div>
-        ) : (
-          <div className="card-list">
-            {filteredSessions.map((session) => (
-              <SessionCard
-                key={session.id}
-                session={session}
-                onShowQR={onShowQR}
-                onSendMessage={onSendMessage}
-                onFocusCMD={onFocusCMD}
-              />
-            ))}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <style>{`
         .session-list {
           width: 100%; height: 100%; display: flex; flex-direction: column;
-          background: var(--bg-primary); border-radius: var(--radius-lg);
-          border: 1px solid var(--border-subtle); overflow: hidden;
-          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-          -webkit-app-region: no-drag;
+          border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+          overflow: hidden;
+          background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.2) 100%);
         }
 
-        .list-header {
-          padding: 16px 14px 12px;
-          border-bottom: 1px solid var(--border-subtle);
+        /* ===== Top Bar ===== */
+        .top-bar {
           flex-shrink: 0;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
         }
-
-        .list-header-top {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 12px;
-        }
-
-        .list-title {
-          font-size: 15px;
-          font-weight: 700;
-          color: var(--text-primary);
-          letter-spacing: 0.5px;
-        }
-
-        .server-info-badge {
-          display: flex;
-          align-items: center;
-          padding: 4px 8px;
-          border-radius: 12px;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid var(--border-subtle);
-          font-size: 10px;
-          color: var(--text-muted);
-          font-family: monospace;
-          cursor: default;
-        }
-
-        .server-port {
-          font-weight: 600;
-        }
-
-        .wechat-status-badge {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          padding: 4px 10px;
-          border-radius: 12px;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid var(--border-subtle);
-          font-size: 10px;
-          color: var(--text-muted);
-        }
-
-        .wechat-status-badge.connected {
-          border-color: rgba(34,197,94,0.3);
-          color: var(--success);
-        }
-
-        .wechat-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--text-muted);
-        }
-
-        .wechat-status-badge.connected .wechat-dot {
-          background: var(--success);
-          box-shadow: 0 0 6px var(--success-glow);
-        }
-
         .search-box {
-          display: flex; align-items: center; gap: 8px;
-          padding: 7px 10px; background: rgba(255,255,255,0.04);
-          border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-          margin-bottom: 10px;
-          -webkit-app-region: no-drag;
-        }
-
-        .search-icon {
-          color: var(--text-muted);
-          flex-shrink: 0;
-        }
-
-        .search-input {
-          flex: 1;
-          background: none;
-          border: none;
-          outline: none;
-          font-size: 12px;
-          color: var(--text-primary);
-        }
-
-        .search-input::placeholder {
-          color: var(--text-muted);
-        }
-
-        .filter-tabs {
-          display: flex;
-          gap: 6px;
-        }
-
-        .filter-tab {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          padding: 5px 12px;
-          border-radius: 12px;
+          display: flex; align-items: center; gap: 6px;
+          margin: 6px 10px;
+          padding: 5px 10px;
+          background: rgba(255,255,255,0.04);
           border: 1px solid var(--border-subtle);
-          background: transparent;
-          color: var(--text-secondary);
-          font-size: 11px;
-          cursor: pointer;
+          border-radius: 6px;
+        }
+        .search-icon { color: var(--text-muted); flex-shrink: 0; }
+        .search-input {
+          flex: 1; min-width: 0;
+          background: none; border: none; outline: none;
+          font-size: 11px; color: var(--text-primary);
+        }
+        .search-input::placeholder { color: var(--text-muted); }
+        .btn-settings {
+          background: none; border: none; color: var(--text-muted);
+          cursor: pointer; padding: 2px; border-radius: 4px;
+          display: flex; align-items: center; justify-content: center;
+          transition: all 0.2s; flex-shrink: 0;
+        }
+        .btn-settings:hover { color: var(--text-primary); background: var(--bg-glass); }
+
+        .conv-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 6px 12px;
+          background: rgba(0,0,0,0.1);
+        }
+        .conv-header-info {
+          display: flex; align-items: center; gap: 8px; min-width: 0;
+        }
+        .conv-name {
+          font-size: 12px; font-weight: 600; color: var(--text-primary);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .conv-duration {
+          font-size: 10px; color: var(--text-muted); white-space: nowrap;
+        }
+        .conv-header-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+        .btn-focus, .btn-qr {
+          background: none; border: none; color: var(--text-secondary);
+          cursor: pointer; padding: 4px; border-radius: 5px;
+          display: flex; align-items: center; justify-content: center;
           transition: all 0.2s;
         }
+        .btn-focus:hover { color: #f59e0b; background: rgba(245,158,11,0.1); }
+        .btn-qr:hover { color: var(--accent); background: rgba(99,102,241,0.1); }
 
-        .filter-tab:hover {
-          border-color: var(--text-muted);
+        /* ===== Main Area (left sidebar + right panel) ===== */
+        .main-area {
+          flex: 1; min-height: 0;
+          display: flex; flex-direction: row;
         }
 
-        .filter-tab.active {
-          background: rgba(99,102,241,0.15);
-          border-color: var(--border-active);
-          color: var(--accent);
+        /* ===== Left Sidebar ===== */
+        .sidebar-left {
+          width: 160px; flex-shrink: 0;
+          display: flex; flex-direction: column;
+          border-right: 1px solid rgba(255,255,255,0.06);
+          background: rgba(255,255,255,0.04);
+          position: relative;
+        }
+        .tab-list {
+          flex: 1; overflow-y: auto; padding: 4px 0;
+        }
+        .session-tab {
+          display: flex; align-items: center; gap: 8px;
+          padding: 8px 10px; cursor: pointer; transition: all 0.15s;
+          border-left: 2px solid transparent;
+        }
+        .session-tab:hover { background: rgba(255,255,255,0.03); }
+        .session-tab.dragging { opacity: 0.35; }
+        .session-tab.drag-over { border-top: 2px solid var(--accent); }
+        .session-tab.active {
+          background: rgba(99,102,241,0.08);
+          border-left-color: var(--accent);
+        }
+        .tab-dot {
+          width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+          align-self: flex-start; margin-top: 6px;
+        }
+        .tab-text {
+          display: flex; flex-direction: column; gap: 1px;
+          min-width: 0; flex: 1;
+        }
+        .tab-name {
+          font-size: 11px; color: var(--text-primary); font-weight: 500;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .session-tab.active .tab-name { color: var(--accent); font-weight: 600; }
+        .tab-sub {
+          font-size: 9px; color: var(--text-muted);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .tab-source {
+          font-size: 8px; color: var(--text-muted); opacity: 0.7;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .tab-empty {
+          text-align: center; padding: 16px 8px;
+          font-size: 10px; color: var(--text-muted);
         }
 
-        .filter-count {
-          font-size: 10px;
-          padding: 1px 5px;
-          border-radius: 8px;
-          background: rgba(255,255,255,0.06);
+        /* ===== Right Panel ===== */
+        .panel-right {
+          flex: 1; min-width: 0;
+          display: flex; flex-direction: column;
+        }
+        .conv-empty {
+          flex: 1; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; gap: 8px;
+          color: var(--text-muted); font-size: 12px;
+        }
+        .conv-empty .empty-icon { opacity: 0.4; }
+
+        .conv-messages {
+          flex: 1; overflow-y: auto; padding: 8px 12px;
+          display: flex; flex-direction: column; gap: 5px;
+          user-select: text; cursor: text;
+        }
+        .no-messages { text-align: center; padding: 20px; color: var(--text-muted); font-size: 11px; }
+
+        .msg-row { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 8px; }
+        .msg-row-user { justify-content: flex-end; }
+        .msg-row-claude { justify-content: flex-start; }
+
+        .msg-bubble {
+          flex: 1; padding: 6px 10px; border-radius: 12px;
+          font-size: 11px; line-height: 1.45;
+        }
+        .bubble-user {
+          background: var(--accent); color: white;
+          border-bottom-right-radius: 4px;
+          overflow-x: auto;
+        }
+        .bubble-user .msg-time { color: rgba(255,255,255,0.6); }
+        .bubble-claude {
+          background: var(--bg-glass);
+          border-bottom-left-radius: 4px;
+          overflow-x: auto;
         }
 
-        .list-body {
-          flex: 1;
-          overflow-y: auto;
-          padding: 10px 14px;
+        .msg-content { word-break: break-word; cursor: text; }
+        .bubble-user .msg-content { color: white; }
+        .bubble-user .msg-content strong { color: #f0f0f5; }
+        .bubble-user .msg-content em { color: #d0d0e0; }
+        .bubble-user .msg-content code { background: rgba(255,255,255,0.15); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 10px; }
+        .bubble-user .msg-content a { color: #c7d2fe; }
+        .bubble-claude .msg-content { color: var(--text-primary); }
+        .bubble-claude .msg-content strong { color: var(--text-primary); font-weight: 700; }
+        .bubble-claude .msg-content em { color: var(--text-secondary); }
+        .bubble-claude .msg-content code { background: rgba(0,0,0,0.08); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 10px; }
+        .bubble-claude .msg-content a { color: var(--accent); }
+        .msg-content pre { background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 5px; overflow-x: auto; margin: 3px 0; font-size: 10px; }
+        .msg-content pre code { background: none; padding: 0; }
+        .msg-content ul, .msg-content ol { margin: 2px 0; padding-left: 14px; }
+        .msg-content li { margin: 1px 0; }
+        .msg-content blockquote { border-left: 2px solid rgba(255,255,255,0.2); padding-left: 6px; margin: 3px 0; opacity: 0.8; }
+        .msg-content h1, .msg-content h2, .msg-content h3 { font-size: 12px; font-weight: 700; margin: 3px 0 2px; }
+        .msg-content hr { border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 3px 0; }
+        .msg-content table { border-collapse: collapse; font-size: 10px; }
+        .msg-content th, .msg-content td { border: 1px solid rgba(255,255,255,0.15); padding: 1px 4px; }
+
+        .msg-footer {
+          display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+          margin-top: 2px;
+        }
+        .msg-time { font-size: 8px; }
+        .msg-loading {
+          width: 10px; height: 10px; flex-shrink: 0;
+          border: 2px solid rgba(255,255,255,0.25);
+          border-top-color: white; border-radius: 50%;
+          animation: spin 0.6s linear infinite;
+        }
+        .bubble-claude .msg-loading {
+          border-color: rgba(99,102,241,0.2);
+          border-top-color: var(--accent);
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .thinking-dots { padding: 4px 4px 4px 0; }
+        .thinking-dots i {
+          font-style: normal; font-size: 14px; font-weight: 700; color: var(--accent);
+          animation: dot-blink 1.2s ease-in-out infinite;
+        }
+        .thinking-dots i:nth-child(1) { animation-delay: 0s; }
+        .thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes dot-blink {
+          0%, 60%, 100% { opacity: 0.15; }
+          30% { opacity: 1; }
         }
 
-        .card-list {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
+        .conv-input {
+          display: flex; gap: 5px; padding: 8px 12px; flex-shrink: 0;
+          border-top: 1px solid rgba(255,255,255,0.05);
+          position: relative;
+        }
+        .msg-input {
+          flex: 1; min-width: 0;
+          background: rgba(255,255,255,0.05); border: 1px solid var(--border-subtle);
+          border-radius: 6px; padding: 6px 8px; font-size: 11px;
+          color: var(--text-primary); outline: none; transition: border-color 0.2s;
+          user-select: text;
+        }
+        .msg-input:focus { border-color: var(--border-active); }
+        .msg-input:disabled { opacity: 0.4; }
+        .btn-send {
+          background: var(--accent); border: none; border-radius: 6px;
+          padding: 6px 12px; font-size: 11px; font-weight: 600;
+          color: white; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+        }
+        .btn-send:hover:not(:disabled) { background: #5558e6; }
+        .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .kb-tip {
+          position: absolute; z-index: 10; pointer-events: none;
+          background: rgba(18,18,24,0.95); color: #f0f0f5;
+          font-size: 10px; padding: 3px 8px; border-radius: 5px;
+          border: 1px solid rgba(255,255,255,0.15);
+          white-space: nowrap; opacity: 0; transition: opacity 0.15s;
+        }
+        .sidebar-left:hover .kb-tip { opacity: 1; }
+        .tip-tab {
+          left: 50%; bottom: 40px; transform: translateX(-50%);
+        }
+        .conv-input:hover .kb-tip { opacity: 1; }
+        .tip-enter {
+          right: 80px; top: -24px;
         }
 
-        .empty-state {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          padding: 40px 20px;
-          text-align: center;
+        .send-error {
+          margin: 4px 12px 8px; padding: 5px 8px;
+          background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+          border-radius: 6px; font-size: 10px; color: #ef4444;
         }
-
-        .empty-icon {
-          color: var(--text-muted);
-          margin-bottom: 16px;
-          opacity: 0.5;
+        .cmd-queue { margin: 0 12px 4px; flex-shrink: 0; }
+        .cmd-queue-toggle {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 4px 8px; cursor: pointer; font-size: 9px; color: var(--text-muted);
+          border-radius: 4px; transition: background 0.15s;
         }
-
-        .empty-title {
-          font-size: 14px;
-          font-weight: 600;
-          color: var(--text-secondary);
-          margin-bottom: 6px;
+        .cmd-queue-toggle:hover { background: rgba(255,255,255,0.03); }
+        .cmd-queue-body { padding: 4px 0; display: flex; flex-direction: column; gap: 3px; }
+        .cmd-queue-item {
+          display: flex; align-items: center; gap: 4px;
+          padding: 3px 8px; background: rgba(99,102,241,0.06);
+          border-radius: 4px; font-size: 10px; color: var(--text-primary);
         }
-
-        .empty-desc {
-          font-size: 11px;
-          color: var(--text-muted);
-          line-height: 1.5;
+        .cmd-queue-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cmd-queue-del {
+          background: none; border: none; color: var(--text-muted); cursor: pointer;
+          font-size: 12px; padding: 0 2px; line-height: 1;
         }
+        .cmd-queue-del:hover { color: var(--danger); }
+        .cmd-queue-add {
+          display: flex; gap: 4px;
+        }
+        .cmd-queue-add input {
+          flex: 1; min-width: 0; padding: 3px 8px; border-radius: 4px;
+          background: rgba(255,255,255,0.04); border: 1px solid var(--border-subtle);
+          font-size: 10px; color: var(--text-primary); outline: none;
+        }
+        .cmd-queue-add input:focus { border-color: var(--border-active); }
+        .cmd-queue-add button {
+          background: var(--accent); border: none; border-radius: 4px;
+          color: #fff; font-size: 12px; padding: 2px 8px; cursor: pointer;
+        }
+        .cmd-queue-clear {
+          background: none; border: none; color: var(--text-muted); cursor: pointer;
+          font-size: 9px; padding: 2px 0; text-align: left;
+        }
+        .cmd-queue-clear:hover { color: var(--danger); }
       `}</style>
     </div>
   );

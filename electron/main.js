@@ -118,6 +118,42 @@ function setupIPC() {
     if (pub) return `${pub}/session/${id}`;
     return `http://${localServer.getLocalIP()}:${localServer.getPort()}/session/${id}`;
   });
+
+  ipcMain.handle('has-custom-server', () => {
+    if (!localServer) return false;
+    return !!(localServer.publicBase);
+  });
+
+  // === Auth IPC ===
+  ipcMain.handle('get-access-pin', () => localServer ? localServer.getAccessPin() : '');
+  ipcMain.handle('get-device-mode', () => localServer ? localServer.getDeviceMode() : 1);
+  ipcMain.handle('set-device-mode', (_, mode) => { if (localServer) localServer.setDeviceMode(mode); });
+  ipcMain.handle('reset-first-device', () => { if (localServer) localServer.resetFirstDevice(); });
+  ipcMain.handle('regenerate-pin', () => localServer ? localServer.regeneratePin() : '');
+  ipcMain.handle('get-pending-devices', () => localServer ? localServer.getPendingDevices() : []);
+  ipcMain.handle('get-approved-devices', () => localServer ? localServer.getApprovedDevices() : []);
+  ipcMain.handle('approve-device', (_, deviceId) => localServer ? localServer.approveDevice(deviceId) : false);
+  ipcMain.handle('reject-device', (_, deviceId) => { if (localServer) localServer.rejectDevice(deviceId); });
+  // Command queue
+  ipcMain.handle('get-queue', (_, sessionId) => sessionMonitor ? sessionMonitor.getQueue(sessionId) : []);
+  ipcMain.handle('add-to-queue', (_, sessionId, cmd) => { if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd); });
+  ipcMain.handle('remove-from-queue', (_, sessionId, index) => { if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index); });
+  ipcMain.handle('clear-queue', (_, sessionId) => { if (sessionMonitor) sessionMonitor.clearQueue(sessionId); });
+
+  ipcMain.handle('new-claude-session', async (_, cwd) => {
+    const { spawn } = require('child_process');
+    const path = require('path');
+    const os = require('os');
+    const dir = (cwd && fs.existsSync(cwd)) ? cwd : os.homedir();
+    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
+      cwd: dir,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    child.unref();
+    return { success: true, cwd: dir };
+  });
   ipcMain.handle('send-to-session', async (_, id, msg) => {
     if (!sessionMonitor) return { success: false, error: 'Session monitor not available' };
     return sessionMonitor.sendToSession(id, msg);
@@ -127,14 +163,20 @@ function setupIPC() {
     return sessionMonitor.focusSessionWindow(id);
   });
   ipcMain.handle('get-tunnel-status', () => localServer ? localServer.getTunnelStatus() : null);
-  ipcMain.handle('start-tunnel', () => localServer ? localServer.startTunnel() : false);
+  ipcMain.handle('start-tunnel', () => {
+    if (!localServer) return false;
+    // If custom server is configured, no SSH tunnel needed — already listening
+    if (localServer.publicBase) {
+      return { active: true, url: localServer.publicBase, service: 'custom' };
+    }
+    return localServer.startTunnel();
+  });
   ipcMain.handle('stop-tunnel', () => localServer ? localServer.stopTunnel() : false);
   ipcMain.handle('get-server-info', () => {
     if (!localServer) return { port: 0, localIP: '127.0.0.1', publicURL: null };
     return { port: localServer.getPort(), localIP: localServer.getLocalIP(), publicURL: localServer.getPublicURL() };
   });
 
-  const settingsPath = path.join(app.getPath('userData'), 'settings.json');
   ipcMain.handle('get-settings', () => {
     try {
       if (fs.existsSync(settingsPath)) {
@@ -143,12 +185,125 @@ function setupIPC() {
     } catch (e) {}
     return { theme: 'dark', showTips: true, toggleShortcut: 'Ctrl+Space', soundNewTask: true, soundCompletion: true };
   });
-  ipcMain.handle('save-settings', (_, settings) => {
+  ipcMain.handle('save-settings', async (_, settings) => {
     try {
+      const oldSettings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
+      // Preserve auth fields from disk — renderer's settings may be stale
+      settings.accessPin = oldSettings.accessPin;
+      settings.deviceMode = oldSettings.deviceMode;
+      settings.firstDeviceId = oldSettings.firstDeviceId;
+      settings.firstDeviceName = oldSettings.firstDeviceName;
+      settings.approvedDevices = oldSettings.approvedDevices;
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+      // Connection mode or server config changed
+      const modeChanged = oldSettings.connectMode !== settings.connectMode;
+      const serverChanged = oldSettings.customServer !== settings.customServer || oldSettings.publicBase !== settings.publicBase;
+      if (modeChanged || serverChanged) {
+        await applyConnectMode(settings);
+        if (localServer.broadcastAuthCheck) localServer.broadcastAuthCheck();
+      }
+      // Notify all renderer windows of settings change
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('settings-changed', settings);
+      }
       return true;
     } catch (e) { return false; }
   });
+
+  async function applyConnectMode(settings) {
+    if (!localServer) return;
+    const mode = settings.connectMode || '';
+    // Stop any active SSH tunnel
+    localServer.stopTunnel();
+
+    if (mode === 'local') {
+      let host = '0.0.0.0', port = 0;
+      if (settings.customServer) {
+        const m = settings.customServer.match(/^(.+):(\d+)$/);
+        if (m) { host = m[1]; port = parseInt(m[2]); }
+      }
+      const publicBase = settings.publicBase ? settings.publicBase.replace(/\/+$/, '') : '';
+      if (host !== localServer.bindHost || port !== localServer.bindPort) {
+        localServer.stop();
+        localServer = new LocalServer({ host, port, publicBase });
+        localServer.setSettingsPath(settingsPath);
+        localServer.initAuth();
+        await localServer.start();
+        localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
+      localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
+        rewireServerEvents();
+        if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
+      }
+    } else if (mode === 'ssh') {
+      // Revert to default bind if needed
+      if (localServer.bindHost !== '0.0.0.0' || localServer.bindPort !== 0) {
+        localServer.stop();
+        localServer = new LocalServer({ host: '0.0.0.0', port: 0, publicBase: '' });
+        localServer.setSettingsPath(settingsPath);
+        localServer.initAuth();
+        await localServer.start();
+        localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
+      localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
+        rewireServerEvents();
+        if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
+      }
+      localServer.startTunnel();
+    } else {
+      // LAN only — revert to default bind
+      if (localServer.bindHost !== '0.0.0.0' || localServer.bindPort !== 0) {
+        localServer.stop();
+        localServer = new LocalServer({ host: '0.0.0.0', port: 0, publicBase: '' });
+        localServer.setSettingsPath(settingsPath);
+        localServer.initAuth();
+        await localServer.start();
+        localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
+      localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
+        rewireServerEvents();
+        if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
+      }
+    }
+  }
+
+  function rewireServerEvents() {
+    localServer.on('session-message', (sessionId, message) => {
+      if (sessionMonitor) sessionMonitor.sendToSession(sessionId, message);
+    });
+    localServer.on('focus-session', (sessionId) => {
+      if (sessionMonitor) sessionMonitor.focusSessionWindow(sessionId);
+    });
+    localServer.on('new-claude-session', (cwd) => {
+      const dir = (cwd && fs.existsSync(cwd)) ? cwd : require('os').homedir();
+      const child = require('child_process').spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
+        cwd: dir, detached: true, stdio: 'ignore', windowsHide: false,
+      });
+      child.unref();
+    });
+    localServer.on('wechat-message', (data) => {
+      if (!sessionMonitor) return;
+      const { sessionId, content } = data;
+      if (sessionId) { sessionMonitor.sendToSession(sessionId, content); }
+      else {
+        const sessions = sessionMonitor.getSessions();
+        const active = sessions.find((s) => s.status === 'working' || s.status === 'thinking' || s.status === 'answering');
+        if (active) sessionMonitor.sendToSession(active.id, content);
+      }
+    });
+    // Command queue
+    localServer.on('get-queue-resp', (socket, sessionId) => {
+      if (sessionMonitor && socket) {
+        socket.emit('queue-data', { sessionId, queue: sessionMonitor.getQueue(sessionId) });
+      }
+    });
+    localServer.on('add-to-queue', (sessionId, cmd) => {
+      if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd);
+    });
+    localServer.on('remove-from-queue', (sessionId, index) => {
+      if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index);
+    });
+    localServer.on('clear-queue', (sessionId) => {
+      if (sessionMonitor) sessionMonitor.clearQueue(sessionId);
+    });
+  }
 
   // Window drag — use known size to avoid drift/resize from getSize() rounding
   ipcMain.on('move-window', (event, dx, dy) => {
@@ -162,11 +317,30 @@ function setupIPC() {
   });
 }
 
+const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+
 app.whenReady().then(async () => {
   sessionMonitor = new SessionMonitor();
   sessionMonitor.start();
-  localServer = new LocalServer();
+  // Read settings for custom server config
+  let serverConfig = { host: '0.0.0.0', port: 0, publicBase: '' };
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const s = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      if (s.customServer) {
+        const m = s.customServer.match(/^(.+):(\d+)$/);
+        if (m) { serverConfig.host = m[1]; serverConfig.port = parseInt(m[2]); }
+      }
+      if (s.publicBase) serverConfig.publicBase = s.publicBase.replace(/\/+$/, '');
+    }
+  } catch (e) {}
+
+  localServer = new LocalServer(serverConfig);
+  localServer.setSettingsPath(settingsPath);
+  localServer.initAuth();
   await localServer.start();
+  localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
+      localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
   wechatBridge = new WechatBridge(localServer);
   wechatBridge.init();
   createIslandWindow();
@@ -175,7 +349,6 @@ app.whenReady().then(async () => {
 
   // Send initial settings to renderer
   try {
-    const settingsPath = path.join(app.getPath('userData'), 'settings.json');
     const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : { theme: 'dark', showTips: true, toggleShortcut: 'Ctrl+Space', soundNewTask: true, soundCompletion: true };
     islandWindow.webContents.send('settings:loaded', settings);
   } catch (e) {}
@@ -213,12 +386,64 @@ app.whenReady().then(async () => {
     if (localServer) localServer.broadcastSessions(sessions);
   });
 
+  sessionMonitor.on('session-messages-changed', (data) => {
+    if (localServer) localServer.onMessagesChanged(data);
+  });
+
+  sessionMonitor.on('queue-updated', (data) => {
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('queue-updated', data);
+    }
+    if (localServer) localServer.onQueueUpdated(data);
+  });
+
   wechatBridge.on('status-changed', (status) => {
     if (islandWindow && !islandWindow.isDestroyed()) islandWindow.webContents.send('wechat:status', status);
   });
 
   localServer.on('session-message', (sessionId, message) => {
     if (sessionMonitor) sessionMonitor.sendToSession(sessionId, message);
+  });
+
+  localServer.on('focus-session', (sessionId) => {
+    if (sessionMonitor) sessionMonitor.focusSessionWindow(sessionId);
+  });
+
+  localServer.on('new-claude-session', (cwd) => {
+    const { spawn } = require('child_process');
+    const dir = (cwd && fs.existsSync(cwd)) ? cwd : require('os').homedir();
+    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
+      cwd: dir, detached: true, stdio: 'ignore', windowsHide: false,
+    });
+    child.unref();
+  });
+
+  // Command queue
+  localServer.on('get-queue-resp', (socket, sessionId) => {
+    if (sessionMonitor && socket) {
+      socket.emit('queue-data', { sessionId, queue: sessionMonitor.getQueue(sessionId) });
+    }
+  });
+  localServer.on('add-to-queue', (sessionId, cmd) => {
+    if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd);
+  });
+  localServer.on('remove-from-queue', (sessionId, index) => {
+    if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index);
+  });
+  localServer.on('clear-queue', (sessionId) => {
+    if (sessionMonitor) sessionMonitor.clearQueue(sessionId);
+  });
+
+  localServer.on('auth-state-changed', () => {
+    // Kick all sockets that no longer pass auth
+    if (localServer.broadcastAuthCheck) localServer.broadcastAuthCheck();
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('auth-state-changed');
+      try {
+        const s = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
+        islandWindow.webContents.send('settings-changed', s);
+      } catch (e) {}
+    }
   });
 
   wechatBridge.on('wechat-message', (data) => {
@@ -232,6 +457,18 @@ app.whenReady().then(async () => {
       if (active) sessionMonitor.sendToSession(active.id, content);
     }
   });
+
+  // Apply saved connection mode on startup
+  try {
+    const s = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
+    if (s.connectMode === 'local' && s.customServer) {
+      const m = s.customServer.match(/^(.+):(\d+)$/);
+      if (m) {
+        localServer.publicBase = (s.publicBase || '').replace(/\/+$/, '');
+        if (localServer.publicBase) localServer.publicURL = localServer.publicBase;
+      }
+    }
+  } catch (e) {}
 
   console.log('CC Island started');
 });

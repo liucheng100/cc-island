@@ -1,8 +1,9 @@
 import React from 'react';
 
 const STATUS_CONFIG = {
-  working: { color: '#6366f1', label: '工作中', icon: '●' },
+  working: { color: '#6366f1', label: '等待中', icon: '●' },
   thinking: { color: '#f59e0b', label: '思考中', icon: '◉' },
+  answering: { color: '#3b82f6', label: '回答中', icon: '▶' },
   completed: { color: '#22c55e', label: '已完成', icon: '✓' },
   error: { color: '#ef4444', label: '错误', icon: '✗' },
   disconnected: { color: '#6b6b80', label: '已断开', icon: '○' },

@@ -1,5 +1,7 @@
 const { EventEmitter } = require('events');
 const { exec } = require('child_process');
+const { clipboard } = require('electron');
+const win32 = require('./win32-utils');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -10,91 +12,171 @@ class SessionMonitor extends EventEmitter {
     super();
     this.sessions = new Map();
     this.pollInterval = null;
-    this.POLL_MS = 2000;
+    this.heartbeatInterval = null;
+    this.POLL_MS = 1000;
+    this.HEARTBEAT_MS = 5000;
+    this.STALE_TIMEOUT_MS = 15000;
     this.processInfoCache = new Map();
+    this.cwdCache = new Map();
+    this.scanRunning = false;
+    this._lastMsgCount = new Map(); // sessionKey → message count, for delta detection
+    this.commandQueues = new Map(); // sessionKey → string[]
+    this._lastAutoSent = new Map(); // sessionKey → timestamp, prevent duplicate auto-send
+  }
+
+  // === Command Queue ===
+  getQueue(sessionId) { return this.commandQueues.get(sessionId) || []; }
+  addToQueue(sessionId, command) {
+    if (!this.commandQueues.has(sessionId)) this.commandQueues.set(sessionId, []);
+    this.commandQueues.get(sessionId).push(command);
+    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+  }
+  removeFromQueue(sessionId, index) {
+    const q = this.commandQueues.get(sessionId);
+    if (q) { q.splice(index, 1); if (q.length === 0) this.commandQueues.delete(sessionId); }
+    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+  }
+  clearQueue(sessionId) {
+    this.commandQueues.delete(sessionId);
+    this.emit('queue-updated', { sessionId, queue: [] });
+  }
+
+  // Auto-send next queued command when task completes
+  tryAutoSendNext(sessionId) {
+    const q = this.commandQueues.get(sessionId);
+    if (!q || q.length === 0) return false;
+    // Prevent duplicate auto-send within 3s
+    const lastSent = this._lastAutoSent.get(sessionId) || 0;
+    if (Date.now() - lastSent < 3000) return false;
+    const cmd = q.shift();
+    if (q.length === 0) this.commandQueues.delete(sessionId);
+    this._lastAutoSent.set(sessionId, Date.now());
+    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+    this.sendToSession(sessionId, cmd);
+    return true;
   }
 
   start() {
     this.scanSessions();
     this.pollInterval = setInterval(() => this.scanSessions(), this.POLL_MS);
+    this.heartbeatInterval = setInterval(() => this.runHeartbeat(), this.HEARTBEAT_MS);
   }
 
   stop() {
     if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
+    if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; }
   }
 
-  // Generate a stable session key from working directory + process signature
-  // This prevents duplicate sessions from subprocesses sharing the same CWD
   makeSessionKey(pid, cwd, terminalPid) {
-    // Use CWD as primary key — one Claude Code session = one working directory
-    // If CWD is homedir (unreliable), use terminalPid to distinguish sessions
-    const isGenericCwd = !cwd || cwd === os.homedir() || cwd === 'C:\\' || cwd === '/';
-    const keySource = isGenericCwd ? `terminal-${terminalPid || pid}` : cwd;
-    const normalized = keySource.replace(/\\/g, '/').toLowerCase();
+    const dir = (cwd && cwd !== os.homedir() && cwd !== 'C:\\' && cwd !== '/') ? cwd : 'home';
+    const term = terminalPid || pid;
+    const keySource = `${dir}::terminal-${term}`;
+    const normalized = String(keySource).replace(/\\/g, '/').toLowerCase();
     return `claude-${crypto.createHash('md5').update(normalized).digest('hex').substring(0, 8)}`;
   }
 
+  getStableCwd(pid, cwd) {
+    if (!cwd || cwd === os.homedir() || cwd === 'C:\\' || cwd === '/') {
+      return this.cwdCache.get(pid)?.cwd || cwd;
+    }
+    if (!this.cwdCache.has(pid) || this.cwdCache.get(pid).cwd !== cwd) {
+      this.cwdCache.set(pid, { cwd, ts: Date.now() });
+    }
+    return cwd;
+  }
+
   async scanSessions() {
+    if (this.scanRunning) return;
+    this.scanRunning = true;
     try {
-      this.processInfoCache.clear();
       const processes = await this.findClaudeProcesses();
       const currentKeys = new Set();
 
       for (const proc of processes) {
-        const key = this.makeSessionKey(proc.pid, proc.cwd, proc.terminalPid);
-        currentKeys.add(key);
+        const meta = await this.readSessionMeta(proc.pid);
+        const rawCwd = proc.cwd || meta.cwd || await this.extractCwd(proc.pid, proc.commandLine, proc.name);
+        const cwd = this.getStableCwd(proc.pid, rawCwd);
+        const terminalPid = proc.terminalPid || await this.findTerminalPid(proc.pid, proc.parentPid || 0);
+        proc.cwd = cwd;
+        proc.terminalPid = terminalPid;
 
-        if (!this.sessions.has(key)) {
+        const key = this.makeSessionKey(proc.pid, cwd, terminalPid);
+        currentKeys.add(key);
+        const isNew = !this.sessions.has(key);
+
+        if (isNew) {
+          const convData = await this.readConversationByPid(proc.pid, meta.sessionId, cwd);
+          const title = convData.title || this.extractSessionName(proc.commandLine, cwd, proc.name);
+
+          const source = await this.getSourceLabel(terminalPid, proc.parentPid);
+          const displayName = source ? `[${source}] ${title}` : title;
+
           const session = {
-            ...proc,
-            id: key,
-            status: 'working',
-            startTime: new Date().toISOString(),
-            messages: [],
-            lastActivity: new Date().toISOString(),
-            workingDuration: 0,
+            id: key, pid: proc.pid, parentPid: proc.parentPid || 0,
+            terminalPid, name: displayName, cwd, commandLine: proc.commandLine,
+            sessionId: meta.sessionId,
+            status: meta.status === 'busy' ? 'answering' : (convData.status || 'working'),
+            startTime: new Date().toISOString(), messages: convData.messages || [],
+            lastActivity: new Date().toISOString(), workingDuration: 0,
+            _lastFileMtime: convData.fileMtime || 0,
           };
           this.sessions.set(key, session);
-          console.log(`[SessionMonitor] New: ${proc.name} (${key}) pid=${proc.pid} parent=${proc.parentPid} terminal=${proc.terminalPid} cwd=${proc.cwd}`);
+          this._lastMsgCount.set(key, convData.messages ? convData.messages.length : 0);
+          console.log(`[SessionMonitor] New: ${title} (${key}) pid=${proc.pid} terminal=${terminalPid} cwd=${cwd} status=${session.status}`);
         } else {
           const existing = this.sessions.get(key);
-          existing.pid = proc.pid; // update PID in case process restarted
+          existing.pid = proc.pid;
           existing.parentPid = proc.parentPid || 0;
-          existing.terminalPid = proc.terminalPid || 0;
+          existing.terminalPid = terminalPid || existing.terminalPid;
           existing.commandLine = proc.commandLine;
+          existing.sessionId = meta.sessionId || existing.sessionId;
           existing.lastActivity = new Date().toISOString();
 
-          const isDone = await this.checkCompletion(proc);
-          if (isDone && existing.status === 'working' && proc.pid > 0) {
-            existing.status = 'completed';
-            existing.completedTime = new Date().toISOString();
-            console.log(`[SessionMonitor] Done: ${proc.name}`);
-          } else if (!isDone && existing.status === 'completed') {
-            existing.status = 'working';
+          const convData = await this.readConversationByPid(proc.pid, meta.sessionId || existing.sessionId, cwd);
+          if (convData.messages && convData.messages.length > 0) {
+            const prevCount = this._lastMsgCount.get(key) || 0;
+            const newCount = convData.messages.length;
+            if (newCount > prevCount) {
+              const delta = convData.messages.slice(prevCount);
+              this._lastMsgCount.set(key, newCount);
+              existing.messages = convData.messages;
+              this.emit('session-messages-changed', { sessionId: key, messages: existing.messages, delta, status: existing.status });
+            } else if (newCount >= (existing.messages ? existing.messages.length : 0)) {
+              existing.messages = convData.messages;
+            }
           }
-
-          const messages = await this.readConversation(proc);
-          if (messages.length > 0) {
-            existing.messages = messages;
+          if (convData.fileMtime) existing._lastFileMtime = convData.fileMtime;
+          if (convData.title) {
+            const source = await this.getSourceLabel(terminalPid, existing.parentPid);
+            existing.name = source ? `[${source}] ${convData.title}` : convData.title;
           }
-
-          existing.workingDuration = Math.floor(
-            (Date.now() - new Date(existing.startTime).getTime()) / 1000
-          );
+          const prev = existing.status;
+          if (meta.status === 'busy') {
+            existing.status = 'answering';
+            existing._justSent = 0; // clear — Claude is actually working now
+          } else if (meta.status === 'idle') {
+            if (prev === 'answering' || prev === 'thinking') {
+              // Don't complete if we just sent a message (<5s ago)
+              if (!existing._justSent || Date.now() - existing._justSent > 5000) {
+                existing.status = 'completed';
+                // Auto-send next queued command
+                if (this.commandQueues.has(key) && this.commandQueues.get(key).length > 0) {
+                  setTimeout(() => this.tryAutoSendNext(key), 500);
+                }
+              }
+            }
+          } else if (convData.status) {
+            existing.status = convData.status;
+          }
+          if (prev !== existing.status) console.log(`[SessionMonitor] Status: ${existing.name} ${prev} -> ${existing.status} (meta=${meta.status})`);
+          existing.workingDuration = Math.floor((Date.now() - new Date(existing.startTime).getTime()) / 1000);
         }
       }
 
-      // Mark sessions no longer seen
+      // Always cleanup stale sessions (even when no processes found)
       for (const [key, session] of this.sessions) {
         if (!currentKeys.has(key)) {
-          session.status = 'disconnected';
-        }
-      }
-
-      // Clean stale disconnected after 5 minutes
-      const now = Date.now();
-      for (const [key, session] of this.sessions) {
-        if (session.status === 'disconnected' && now - new Date(session.lastActivity).getTime() > 300000) {
+          console.log(`[SessionMonitor] Removed: ${session.name} (${key})`);
           this.sessions.delete(key);
         }
       }
@@ -102,163 +184,177 @@ class SessionMonitor extends EventEmitter {
       this.emit('sessions-updated', this.getSessions());
     } catch (err) {
       console.error('[SessionMonitor] Scan error:', err.message);
+    } finally {
+      this.scanRunning = false;
     }
   }
 
   async findClaudeProcesses() {
     return new Promise((resolve) => {
-      // Use PowerShell to find genuine Claude Code processes
-      // Claude Code CLI: command line contains "@anthropic-ai/claude-code" or runs "claude" binary
-      // Claude Code Desktop: process name is "Claude" or "Claude Code"
-      const psCmd = `powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process; $results = @(); foreach ($p in $procs) { $cl = if($p.CommandLine) { $p.CommandLine } else { '' }; $nm = if($p.Name) { $p.Name } else { '' }; if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code' -or $cl -match '(^|[\\\\/ ])claude(\\.exe)?( |$)' -or $nm -match '^claude(\\.exe)?$' -or $nm -match '^Claude' -or $nm -match 'Claude Code') { $results += $p } }; $results | Select-Object ProcessId, ParentProcessId, Name, CommandLine | ConvertTo-Csv -NoTypeInformation" 2>nul`;
+      const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+$filter = "Name='node.exe' OR Name='cmd.exe' OR Name='powershell.exe' OR Name='pwsh.exe' OR Name='claude.exe'"
+$all = Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue
+$results = @()
+foreach ($p in $all) {
+  $cl = if($p.CommandLine) { $p.CommandLine } else { '' }
+  if ($p.Name -ne 'claude.exe' -and $cl.Length -eq 0) { continue }
+  $isClaude = $false
+  if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code') { $isClaude = $true }
+  elseif ($cl -match '[\\\\/]claude(\\\\.exe)?[" ]' -or $cl -match '^claude(\\\\.exe)?[" ]') { $isClaude = $true }
+  elseif ($p.Name -eq 'claude.exe') { $isClaude = $true }
+  if ($isClaude) {
+    if ($cl -match 'cc-island|CC Island|Get-CimInstance|Select-Object|ConvertTo-Json') { continue }
+    if ($cl -match 'npm[ -]cli' -or $cl -match 'npm\\s+(view|install|search|info|config|run)') { continue }
+    $results += [PSCustomObject]@{ Pid=$p.ProcessId; ParentPid=$p.ParentProcessId; Name=$p.Name; Cmd=$cl.Substring(0,[Math]::Min(500,$cl.Length)) }
+  }
+}
+$results | ConvertTo-Json -Compress
+`;
+      const tmpFile = path.join(os.tmpdir(), 'cc-island-scan.ps1');
+      try { fs.writeFileSync(tmpFile, psScript, 'utf8'); } catch (e) { resolve([]); return; }
+      exec(`powershell -ExecutionPolicy Bypass -File "${tmpFile}"`, { timeout: 8000 }, (err, stdout) => {
+        try { fs.unlinkSync(tmpFile); } catch (e) {}
+        if (err || !stdout || !stdout.trim()) { this.findClaudeProcessesFallback().then(resolve); return; }
+        try {
+          const data = JSON.parse(stdout.trim());
+          const list = Array.isArray(data) ? data : (data ? [data] : []);
+          resolve(list.map((p) => ({ pid: p.Pid, parentPid: p.ParentPid || 0, terminalPid: 0, name: p.Name || 'claude', cwd: '', commandLine: p.Cmd || '' })));
+        } catch (e) { this.findClaudeProcessesFallback().then(resolve); }
+      });
+    });
+  }
 
-      exec(psCmd, { timeout: 10000 }, async (err, stdout) => {
-        if (err || !stdout || stdout.trim().length === 0) {
-          this.findClaudeProcessesWMIC().then(resolve);
-          return;
-        }
-
+  async findClaudeProcessesFallback() {
+    return new Promise((resolve) => {
+      const cmd = `wmic process where "name='node.exe' or name='cmd.exe' or name='powershell.exe' or name='claude.exe'" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`;
+      exec(cmd, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout) { resolve([]); return; }
         const tasks = [];
-        const lines = stdout.trim().split('\n').slice(1);
-
+        const lines = stdout.split('\n').filter((l) => l.trim());
         for (const line of lines) {
-          const parts = line.replace(/^"|"$/g, '').split('","');
+          const firstComma = line.indexOf(',');
+          if (firstComma < 0) continue;
+          const parts = line.substring(firstComma + 1).split(',');
           if (parts.length < 3) continue;
-
-          const pid = parts[0].replace(/"/g, '').trim();
-          const parentPid = parts[1].replace(/"/g, '').trim();
-          const name = parts[2].replace(/"/g, '').trim();
-          const cmdLine = parts.slice(3).join('","').replace(/"/g, '').trim();
-
+          const pid = parts[0].trim(), parentPid = parts[1].trim(), name = parts[2].trim(), cmdLine = parts.slice(3).join(',').trim();
           if (!pid || isNaN(parseInt(pid))) continue;
-
-          // Skip our own process
-          if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island')) continue;
-          if (cmdLine.includes('electron') && !cmdLine.includes('claude')) continue;
-          // Skip this very PowerShell command
-          if (cmdLine.includes('Get-CimInstance')) continue;
-
-          const cwd = await this.extractCwd(pid, cmdLine);
-          const sessionName = this.extractSessionName(cmdLine, cwd, name);
-          const terminalPid = await this.findTerminalPid(parseInt(pid), parseInt(parentPid) || 0);
-
-          tasks.push({
-            pid: parseInt(pid),
-            parentPid: parseInt(parentPid) || 0,
-            terminalPid: terminalPid,
-            name: sessionName,
-            cwd: cwd,
-            commandLine: cmdLine.substring(0, 500),
-          });
+          const isClaude = cmdLine.includes('@anthropic-ai/claude-code') || cmdLine.includes('claude-code')
+            || cmdLine.match(/[\\/]claude(\.exe)?[" ]/) || cmdLine.match(/^claude(\.exe)?[" ]/)
+            || name === 'claude.exe';
+          if (!isClaude) continue;
+          if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island') || cmdLine.includes('.vscode')) continue;
+          tasks.push({ pid: parseInt(pid), parentPid: parseInt(parentPid) || 0, terminalPid: 0, name, cwd: '', commandLine: cmdLine.substring(0, 500) });
         }
-
         resolve(tasks);
       });
     });
   }
 
+  async extractCwd(pid, cmdLine, processName) {
+    const cached = this.cwdCache.get(pid);
+    if (cached && Date.now() - cached.ts < 60000) return cached.cwd;
+    // Try --cwd/--dir from command line
+    const cwdMatch = cmdLine.match(/(?:--cwd|--dir)\s+["']?([^"'\s]+)/i);
+    if (cwdMatch && fs.existsSync(cwdMatch[1])) { this.cwdCache.set(pid, { cwd: cwdMatch[1], ts: Date.now() }); return cwdMatch[1]; }
+    // For standalone claude.exe (uv/pipx), query CWD directly from the process
+    if (processName === 'claude.exe') {
+      const directCwd = await this.queryProcessCwd(pid);
+      if (directCwd && fs.existsSync(directCwd)) { this.cwdCache.set(pid, { cwd: directCwd, ts: Date.now() }); return directCwd; }
+    }
+    const parentPid = await this.getParentPid(pid);
+    if (parentPid) {
+      const cwdFromTitle = await this.getCwdFromWindowTitle(parentPid);
+      if (cwdFromTitle && fs.existsSync(cwdFromTitle)) { this.cwdCache.set(pid, { cwd: cwdFromTitle, ts: Date.now() }); return cwdFromTitle; }
+    }
+    try {
+      const cwd = await this.queryProcessCwdViaParent(pid);
+      if (cwd && cwd !== os.homedir() && fs.existsSync(cwd)) { this.cwdCache.set(pid, { cwd, ts: Date.now() }); return cwd; }
+    } catch (e) {}
+    return os.homedir();
+  }
+
+  // Query CWD of a process directly (works for standalone processes like claude.exe)
+  async queryProcessCwd(pid) {
+    return new Promise((resolve) => {
+      // Use WMI to get the process's CommandLine, then try to extract CWD from it,
+      // or fallback to checking the parent process's window title
+      exec(`powershell -NoProfile -Command "
+$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -EA SilentlyContinue
+if (-not $p) { return }
+# Try to get parent process's window title (the terminal CWD)
+$parent = Get-CimInstance Win32_Process -Filter \\"ProcessId=$($p.ParentProcessId)\\" -EA SilentlyContinue
+if ($parent) {
+  $parentProc = Get-Process -Id $parent.ProcessId -EA SilentlyContinue
+  if ($parentProc -and $parentProc.MainWindowTitle) {
+    $title = $parentProc.MainWindowTitle
+    if ($title -match '([A-Z]:\\\\[^\\\\s]+)') { Write-Output $matches[1]; return }
+  }
+}
+# Fallback: check if claude.exe's own command line contains a path
+if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
+  $possible = $matches[0]
+  while (-not (Test-Path $possible -PathType Container) -and $possible -match '[\\\\/]') {
+    $possible = Split-Path $possible -Parent
+  }
+  if (Test-Path $possible -PathType Container) { Write-Output $possible }
+}
+"`, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) { resolve(null); return; }
+        const cwd = stdout.trim();
+        resolve(fs.existsSync(cwd) ? cwd : null);
+      });
+    });
+  }
+
+  async getParentPid(pid) {
+    return new Promise((resolve) => {
+      exec(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue).ParentProcessId"`, { timeout: 3000 }, (err, stdout) => {
+        if (err || !stdout) { resolve(0); return; }
+        resolve(parseInt(stdout.trim()) || 0);
+      });
+    });
+  }
+
   async findTerminalPid(pid, parentPid) {
-    // Walk up parent chain to find CMD/PowerShell/Windows Terminal/conhost
-    const terminalNames = new Set(['cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'conhost.exe']);
-    let currentPid = parentPid || pid;
-    const chain = [];
+    const terminalNames = new Set(['cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'conhost.exe', 'winterminal.exe']);
+    let cur = parentPid || pid;
     for (let i = 0; i < 10; i++) {
-      if (!currentPid || currentPid === 0) break;
-      const info = await this.getProcessInfo(currentPid);
+      if (!cur || cur === 0) break;
+      const info = await this.getProcessInfo(cur);
       if (!info) break;
-      const name = (info.Name || '').toLowerCase();
-      chain.push(`${name}(${currentPid})`);
-      if (terminalNames.has(name)) return currentPid;
+      if (terminalNames.has((info.Name || '').toLowerCase())) return cur;
       if (!info.ParentProcessId || info.ParentProcessId === 0) break;
-      currentPid = info.ParentProcessId;
+      cur = info.ParentProcessId;
     }
     return parentPid || pid;
   }
 
-  async extractCwd(pid, cmdLine) {
-    // Method 1: Parse from command line
-    const cwdMatch = cmdLine.match(/(?:--cwd|--dir)\s+["']?([^"'\s]+)/i);
-    if (cwdMatch && fs.existsSync(cwdMatch[1])) return cwdMatch[1];
-
-    // Method 2: Walk up parent chain to find a CMD/terminal with a real CWD
-    try {
-      const cwd = await this.queryProcessCwdViaParent(pid);
-      if (cwd && cwd !== os.homedir() && fs.existsSync(cwd)) return cwd;
-    } catch (e) { /* ignore */ }
-
-    // Method 3: Extract Windows path from command line (skip claude.exe install paths)
-    const pathMatch = cmdLine.match(/([A-Z]:\\[^"'\s]+)/i);
-    if (pathMatch) {
-      const candidate = pathMatch[1];
-      // Skip paths that look like claude.exe install locations
-      if (!candidate.toLowerCase().includes('claude') || !candidate.toLowerCase().endsWith('.exe')) {
-        if (fs.existsSync(candidate)) return candidate;
-        const parent = path.dirname(candidate);
-        if (fs.existsSync(parent)) return parent;
-      }
-    }
-
-    return os.homedir();
-  }
-
   async queryProcessCwdViaParent(pid) {
-    let currentPid = pid;
+    let cur = pid;
     for (let i = 0; i < 10; i++) {
-      const info = await this.getProcessInfo(currentPid);
+      const info = await this.getProcessInfo(cur);
       if (!info) break;
       const name = (info.Name || '').toLowerCase();
       if (name === 'cmd.exe' || name === 'powershell.exe' || name === 'pwsh.exe' || name === 'windowsterminal.exe') {
-        const cwd = await this.getCwdFromWindowTitle(currentPid);
+        const cwd = await this.getCwdFromWindowTitle(cur);
         if (cwd) return cwd;
       }
       if (!info.ParentProcessId || info.ParentProcessId === 0) break;
-      currentPid = info.ParentProcessId;
+      cur = info.ParentProcessId;
     }
     return null;
   }
 
   async getCwdFromWindowTitle(pid) {
     return new Promise((resolve) => {
-      const ps = `powershell -NoProfile -Command "
-Add-Type @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public class WinTitle {
-  [DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)]
-  public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-  [DllImport(\"user32.dll\", SetLastError=true)]
-  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport(\"user32.dll\")]
-  public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-}
-'@
-\$targetPid = ${pid}
-\$title = ''
-\$cb = [WinTitle+EnumWindowsProc]{ param([IntPtr]\$hWnd, [IntPtr]\$lParam)
-  \$wpid = 0
-  [void][WinTitle]::GetWindowThreadProcessId(\$hWnd, [ref]\$wpid)
-  if (\$wpid -eq \$targetPid) {
-    \$sb = New-Object Text.StringBuilder 512
-    [void][WinTitle]::GetWindowText(\$hWnd, \$sb, 512)
-    \$t = \$sb.ToString()
-    if (\$t -and \$t.Length -gt 2) { \$script:title = \$t; return \$false }
-  }
-  return \$true
-}
-[void][WinTitle]::EnumWindows(\$cb, [IntPtr]::Zero)
-if (\$script:title) { Write-Output \$script:title }
-"`;
-      exec(ps, { timeout: 5000 }, (err, stdout) => {
+      exec(`powershell -NoProfile -Command "$p=Get-Process -Id ${pid} -EA SilentlyContinue; if($p-and$p.MainWindowTitle){$t=$p.MainWindowTitle;if($t-match'([A-Z]:\\\\[^\\s]+)'){Write-Output $matches[1]}elseif($t-match'([A-Z]:)'){Write-Output $t}}"`, { timeout: 3000 }, (err, stdout) => {
         if (err || !stdout || !stdout.trim()) { resolve(null); return; }
         const title = stdout.trim();
-        const pathMatch = title.match(/([A-Z]:\[^:*?"<>|]+)/i);
-        if (pathMatch && fs.existsSync(pathMatch[1])) {
-          resolve(pathMatch[1]);
-        } else {
-          resolve(null);
-        }
+        const m = title.match(/([A-Z]:\\[^:*?"<>|]+)/i);
+        if (m && fs.existsSync(m[1])) { resolve(m[1]); return; }
+        if (fs.existsSync(title)) { resolve(title); return; }
+        resolve(null);
       });
     });
   }
@@ -266,203 +362,236 @@ if (\$script:title) { Write-Output \$script:title }
   async getProcessInfo(pid) {
     const cached = this.processInfoCache.get(pid);
     if (cached && Date.now() - cached.ts < 30000) return cached.info;
-
     return new Promise((resolve) => {
-      const ps = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object Name,ParentProcessId | ConvertTo-Csv -NoTypeInformation"`;
-      exec(ps, { timeout: 5000 }, (err, stdout) => {
-        if (err || !stdout || !stdout.trim()) {
-          this.processInfoCache.set(pid, { info: null, ts: Date.now() });
-          resolve(null);
-          return;
-        }
+      exec(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object Name,ParentProcessId | ConvertTo-Csv -NoTypeInformation"`, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) { this.processInfoCache.set(pid, { info: null, ts: Date.now() }); resolve(null); return; }
         try {
           const lines = stdout.trim().split('\n').slice(1);
           if (lines.length === 0) { this.processInfoCache.set(pid, { info: null, ts: Date.now() }); resolve(null); return; }
           const parts = lines[0].replace(/"/g, '').split(',');
-          const info = {
-            Name: (parts[0] || '').trim(),
-            ParentProcessId: parseInt(parts[1]) || 0,
-          };
+          const info = { Name: (parts[0] || '').trim(), ParentProcessId: parseInt(parts[1]) || 0 };
           this.processInfoCache.set(pid, { info, ts: Date.now() });
           resolve(info);
-        } catch (e) {
-          this.processInfoCache.set(pid, { info: null, ts: Date.now() });
-          resolve(null);
-        }
+        } catch (e) { this.processInfoCache.set(pid, { info: null, ts: Date.now() }); resolve(null); }
       });
     });
   }
 
-  async findClaudeProcessesWMIC() {
-    return new Promise((resolve) => {
-      // Narrower WMIC query — only look for processes likely to be Claude
-      const cmd = `wmic process where "name='node.exe' or name='claude.exe' or name='Claude.exe' or name like 'Claude%'" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`;
-      exec(cmd, { timeout: 5000 }, async (err, stdout) => {
-        if (err || !stdout) { resolve([]); return; }
-
-        const tasks = [];
-        const lines = stdout.split('\n').filter((l) => l.trim());
-
-        for (const line of lines) {
-          const parts = line.split(',');
-          if (parts.length < 3) continue;
-
-          const pid = (parts[1] || '').trim();
-          const parentPid = (parts[2] || '').trim();
-          const name = (parts[3] || '').trim();
-          const cmdLine = parts.slice(4).join(',').trim();
-
-          if (!pid || isNaN(parseInt(pid))) continue;
-
-          // Strict detection: only real Claude processes
-          const isClaude =
-            cmdLine.includes('@anthropic-ai/claude-code') ||
-            cmdLine.includes('claude-code') ||
-            cmdLine.includes('\\claude ') ||
-            (name.toLowerCase().includes('claude') && !cmdLine.includes('cc-island') && !cmdLine.includes('CC Island'));
-
-          if (!isClaude) continue;
-          if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island')) continue;
-          if (cmdLine.includes('Select-Object') || cmdLine.includes('Get-CimInstance')) continue;
-
-          const cwd = await this.extractCwd(pid, cmdLine);
-          const sessionName = this.extractSessionName(cmdLine, cwd, name);
-
-          const terminalPid = await this.findTerminalPid(parseInt(pid), parseInt(parentPid) || 0);
-          tasks.push({
-            pid: parseInt(pid),
-            parentPid: parseInt(parentPid) || 0,
-            terminalPid: terminalPid,
-            name: sessionName,
-            cwd: cwd,
-            commandLine: cmdLine.substring(0, 500),
-          });
-        }
-
-        resolve(tasks);
-      });
-    });
+  async getSourceLabel(terminalPid, parentPid) {
+    if (!terminalPid || terminalPid === 0) terminalPid = parentPid;
+    if (!terminalPid || terminalPid === 0) return null;
+    const info = await this.getProcessInfo(terminalPid);
+    if (!info) return null;
+    const name = (info.Name || '').toLowerCase();
+    if (name === 'cmd.exe') return 'CMD';
+    if (name === 'powershell.exe' || name === 'pwsh.exe') {
+      if (info.ParentProcessId) {
+        const gp = await this.getProcessInfo(info.ParentProcessId);
+        if (gp && (gp.Name || '').toLowerCase() === 'code.exe') return 'VSCode';
+      }
+      return 'PowerShell';
+    }
+    if (name === 'windowsterminal.exe') return '终端';
+    if (name === 'code.exe') return 'VSCode';
+    return null;
   }
 
   extractSessionName(cmdLine, cwd, processName) {
-    const promptMatch = cmdLine.match(/--prompt\s+["']?([^"']+)/);
-    if (promptMatch) return promptMatch[1].substring(0, 50);
-
-    // Use working directory name as session name
-    const dirName = path.basename(cwd);
-    return dirName;
+    const m = cmdLine.match(/--prompt\s+["']?([^"']+)/);
+    if (m) return m[1].substring(0, 50);
+    if (cwd && cwd !== os.homedir()) return path.basename(cwd);
+    return 'Claude Session';
   }
 
-  async checkCompletion(task) {
-    // Check if the terminal process is still alive (not the Claude PID, which may restart)
-    const checkPid = task.terminalPid || task.parentPid || task.pid;
-    if (checkPid === 0) return false;
+  async readSessionMeta(pid) {
+    const f = path.join(os.homedir(), '.claude', 'sessions', `${pid}.json`);
+    try {
+      if (!fs.existsSync(f)) return {};
+      const d = JSON.parse(fs.readFileSync(f, 'utf-8'));
+      return {
+        sessionId: d.sessionId || null,
+        cwd: d.cwd || null,
+        status: d.status || null,
+        updatedAt: d.updatedAt || null,
+      };
+    } catch (e) { return {}; }
+  }
+
+  findProjectDir(cwd) {
+    if (!cwd || cwd === os.homedir()) return null;
+    const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(projectsDir)) return null;
+    const normalized = cwd.replace(/\\/g, '/').toLowerCase();
+    try {
+      for (const entry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const projDir = path.join(projectsDir, entry.name);
+        const files = fs.readdirSync(projDir).filter(f => f.endsWith('.jsonl'));
+        if (files.length === 0) continue;
+        const sorted = files.map(f => ({ name: f, mtime: fs.statSync(path.join(projDir, f)).mtime })).sort((a, b) => b.mtime - a.mtime);
+        const firstLine = fs.readFileSync(path.join(projDir, sorted[0].name), 'utf-8').split('\n')[0];
+        try {
+          const e = JSON.parse(firstLine);
+          if (e.cwd && e.cwd.replace(/\\/g, '/').toLowerCase() === normalized) return projDir;
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async readConversationByPid(pid, sessionId, cwd) {
+    const result = { messages: [], title: null, status: null, fileMtime: 0 };
+    let convPath = null;
+    if (sessionId) {
+      const projDir = this.findProjectDir(cwd);
+      if (projDir) {
+        const candidate = path.join(projDir, `${sessionId}.jsonl`);
+        if (fs.existsSync(candidate)) convPath = candidate;
+      }
+      if (!convPath) {
+        const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+        if (fs.existsSync(projectsDir)) {
+          try {
+            for (const entry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+              if (fs.existsSync(candidate)) { convPath = candidate; break; }
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    if (!convPath && cwd) {
+      const projDir = this.findProjectDir(cwd);
+      if (projDir) {
+        try {
+          const files = fs.readdirSync(projDir).filter(f => f.endsWith('.jsonl'))
+            .map(f => ({ path: path.join(projDir, f), mtime: fs.statSync(path.join(projDir, f)).mtime }))
+            .sort((a, b) => b.mtime - a.mtime);
+          if (files.length > 0) convPath = files[0].path;
+        } catch (e) {}
+      }
+    }
+    if (!convPath || !fs.existsSync(convPath)) return result;
+    result.fileMtime = fs.statSync(convPath).mtime.getTime();
+    try {
+      const content = fs.readFileSync(convPath, 'utf-8');
+      const lines = content.trim().split('\n');
+      const messages = [];
+      let lastUserContent = null;
+      const now = Date.now();
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'file-history-snapshot' || entry.isMeta || entry.type === 'system') continue;
+          const msg = entry.message;
+          if (!msg || !msg.role) continue;
+          let content = '';
+          if (typeof msg.content === 'string') {
+            content = msg.content;
+          } else if (Array.isArray(msg.content)) {
+            content = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join(' ')
+              || msg.content.filter(c => c.type === 'tool_use').map(c => `[${c.name}]`).join(' ');
+          }
+          if (!content || content.trim().length === 0) continue;
+          if (content.startsWith('<local-command') || content.startsWith('<command-name>')
+              || content.startsWith('<command-message>') || content.startsWith('<local-command-stdout>')) continue;
+          if (msg.role === 'user' && content.length > 5
+              && !content.includes('<command-name>') && !content.includes('<local-command')) {
+            lastUserContent = content.substring(0, 80);
+          }
+          messages.push({ role: msg.role, content: content.substring(0, 500), timestamp: entry.timestamp || new Date().toISOString() });
+        } catch (e) {}
+      }
+      result.messages = messages;
+      result.title = lastUserContent || (cwd ? path.basename(cwd) : null);
+      if (messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        const fileAge = now - fs.statSync(convPath).mtime.getTime();
+        if (lastMsg.role === 'assistant') {
+          if (fileAge < 30000) result.status = 'answering';
+          else result.status = 'completed';
+        } else if (lastMsg.role === 'user') {
+          if (fileAge < 5000) result.status = 'thinking';
+          else result.status = 'completed';
+        }
+      }
+    } catch (e) { console.error('[SessionMonitor] Error reading conversation:', e.message); }
+    return result;
+  }
+
+  // Batch-check which PIDs are still alive, clean up dead sessions
+  async runHeartbeat() {
+    if (this.sessions.size === 0) return;
+    const entries = Array.from(this.sessions.entries());
+    const pids = entries.map(([, s]) => s.pid);
+
+    // Batch check all PIDs with a single PowerShell call
+    const alivePids = await this.checkPidsAlive(pids);
+    const aliveSet = new Set(alivePids);
+    const now = Date.now();
+    let changed = false;
+
+    for (const [key, session] of entries) {
+      let dead = false;
+
+      if (!aliveSet.has(session.pid)) {
+        // PID not found — double-check if terminal window still exists
+        const terminalPid = session.terminalPid || session.parentPid || session.pid;
+        if (session.pid !== terminalPid && aliveSet.has(terminalPid)) {
+          // Terminal still alive, claude process may have restarted — keep session for now
+          session.lastActivity = new Date().toISOString();
+          continue;
+        }
+        const hwnd = win32.getConsoleWindowForPid(terminalPid);
+        if (!hwnd) {
+          dead = true;
+        }
+      }
+
+      // Staleness timeout — unseen by scan for too long
+      const lastSeen = new Date(session.lastActivity).getTime();
+      if (!dead && (now - lastSeen > this.STALE_TIMEOUT_MS)) {
+        const hwnd = win32.getConsoleWindowForPid(session.terminalPid || session.parentPid || session.pid);
+        if (!hwnd) {
+          dead = true;
+        }
+      }
+
+      if (dead) {
+        console.log(`[Heartbeat] Dead session: ${session.name} (${key}) pid=${session.pid}`);
+        this.sessions.delete(key);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.emit('sessions-updated', this.getSessions());
+    }
+  }
+
+  // Batch check: return array of PIDs that still exist
+  checkPidsAlive(pids) {
     return new Promise((resolve) => {
-      exec(`tasklist /FI "PID eq ${checkPid}" /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
-        if (err) { resolve(true); return; }
-        resolve(!stdout.includes(`${checkPid}`));
+      if (pids.length === 0) { resolve([]); return; }
+      const list = pids.join(',');
+      exec(`powershell -NoProfile -Command "
+$ids = @(${list})
+$alive = @()
+foreach ($id in $ids) {
+  try { Get-Process -Id $id -ErrorAction Stop | Out-Null; $alive += $id } catch {}
+}
+Write-Output ($alive -join ',')
+"`, { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) { resolve([]); return; }
+        const result = stdout.trim().split(',').map((s) => parseInt(s.trim())).filter((n) => !isNaN(n));
+        resolve(result);
       });
     });
   }
 
-  async readConversation(task) {
-    const claudeDir = path.join(os.homedir(), '.claude');
-    const possiblePaths = [];
-
-    if (fs.existsSync(claudeDir)) {
-      try {
-        const entries = fs.readdirSync(claudeDir);
-        for (const entry of entries) {
-          const full = path.join(claudeDir, entry);
-          try {
-            if (fs.statSync(full).isDirectory() && entry !== 'plugins' && entry !== 'node_modules') {
-              const convDir = path.join(full, 'conversations');
-              if (fs.existsSync(convDir)) possiblePaths.push(convDir);
-            }
-          } catch (e) { /* ignore */ }
-          if (entry.endsWith('.jsonl')) possiblePaths.push(full);
-          if (entry === 'history.jsonl') possiblePaths.push(full);
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    // Check project-local .claude
-    if (task.cwd) {
-      const localClaude = path.join(task.cwd, '.claude');
-      if (fs.existsSync(localClaude)) possiblePaths.push(localClaude);
-    }
-
-    for (const logPath of possiblePaths) {
-      try {
-        if (!fs.existsSync(logPath)) continue;
-        const stat = fs.statSync(logPath);
-
-        if (stat.isDirectory()) {
-          const files = fs.readdirSync(logPath)
-            .filter((f) => f.endsWith('.json') || f.endsWith('.jsonl'))
-            .map((f) => ({ name: f, mtime: fs.statSync(path.join(logPath, f)).mtime }))
-            .sort((a, b) => b.mtime - a.mtime);
-
-          if (files.length > 0) {
-            const msgs = this.parseConversationFile(path.join(logPath, files[0].name));
-            if (msgs.length > 0) return msgs;
-          }
-        } else {
-          const msgs = this.parseConversationFile(logPath);
-          if (msgs.length > 0) return msgs;
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    return [];
-  }
-
-  parseConversationFile(filePath) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const messages = [];
-
-      if (filePath.endsWith('.jsonl')) {
-        const lines = content.trim().split('\n');
-        for (const line of lines.slice(-30)) {
-          try {
-            const entry = JSON.parse(line);
-            if (entry.role || entry.type) {
-              messages.push({
-                role: entry.role || entry.type || 'unknown',
-                content: typeof entry.content === 'string'
-                  ? entry.content.substring(0, 300)
-                  : (entry.content ? JSON.stringify(entry.content).substring(0, 300) : ''),
-                timestamp: entry.timestamp || entry.created_at || new Date().toISOString(),
-              });
-            }
-          } catch (e) { /* skip */ }
-        }
-      } else {
-        const data = JSON.parse(content);
-        const entries = Array.isArray(data) ? data : (data.messages || data.conversation || []);
-        for (const entry of entries.slice(-30)) {
-          messages.push({
-            role: entry.role || entry.type || 'unknown',
-            content: typeof entry.content === 'string'
-              ? entry.content.substring(0, 300)
-              : JSON.stringify(entry.content || '').substring(0, 300),
-            timestamp: entry.timestamp || entry.created_at || new Date().toISOString(),
-          });
-        }
-      }
-
-      return messages;
-    } catch (e) {
-      return [];
-    }
-  }
-
   getSessions() {
-    return Array.from(this.sessions.values()).map((s) => ({
-      ...s,
-      messageCount: s.messages ? s.messages.length : 0,
-    }));
+    return Array.from(this.sessions.values()).map((s) => ({ ...s, messageCount: s.messages ? s.messages.length : 0 }));
   }
 
   getSessionDetail(sessionId) {
@@ -471,150 +600,112 @@ if (\$script:title) { Write-Output \$script:title }
     return { ...session, messages: session.messages || [] };
   }
 
-  // Focus the CMD/console window for this session
   async focusSessionWindow(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (!session || !session.pid) { console.log('[Focus] No session for', sessionId); return false; }
-    const targetPid = session.pid;
-    const parentPid = session.parentPid || 0;
-    const terminalPid = session.terminalPid || parentPid || targetPid;
-    console.log('[Focus] sessionId=' + sessionId + ' targetPid=' + targetPid + ' parentPid=' + parentPid + ' terminalPid=' + terminalPid + ' cwd=' + (session.cwd || ''));
+    if (!session) { console.log('[Focus] No session for', sessionId); return false; }
+    const terminalPid = session.terminalPid || session.parentPid || session.pid;
+    console.log('[Focus] sessionId=' + sessionId + ' terminal=' + terminalPid);
     try {
-      const psScript = `powershell -NoProfile -Command "
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class WinFocus {
-  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
-}
-'@
-function Try-Focus([int]\$pid) {
-  if (-not \$pid -or \$pid -eq 0) { Write-Output \"skip: pid=0\"; return \$false }
-  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
-  if (-not \$p) { Write-Output \"no process: \$pid\"; return \$false }
-  \$h = \$p.MainWindowHandle
-  Write-Output \"check: \$pid name=\$(\$p.ProcessName) handle=\$h visible=\$([WinFocus]::IsWindowVisible(\$h))\"
-  if (\$h -ne [IntPtr]::Zero -and [WinFocus]::IsWindowVisible(\$h)) {
-    [WinFocus]::ShowWindow(\$h, 9) | Out-Null
-    Start-Sleep -Milliseconds 80
-    [WinFocus]::SetForegroundWindow(\$h) | Out-Null
-    Write-Output \"focused: \$pid\"
-    return \$true
-  }
-  return \$false
-}
-\$terminalPid = ${terminalPid}
-\$parentPid = ${parentPid}
-\$targetPid = ${targetPid}
-Write-Output \"terminal=\$terminalPid parent=\$parentPid target=\$targetPid\"
-if (Try-Focus \$terminalPid) { exit 0 }
-if (\$parentPid -ne \$terminalPid -and (Try-Focus \$parentPid)) { exit 0 }
-if (\$targetPid -ne \$terminalPid -and \$targetPid -ne \$parentPid -and (Try-Focus \$targetPid)) { exit 0 }
-\$current = \$terminalPid
-for (\$i = 0; \$i -lt 5; \$i++) {
-  if (-not \$current -or \$current -eq 0) { break }
-  \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
-  if (-not \$proc) { break }
-  \$current = [int]\$proc.ParentProcessId
-  if (Try-Focus \$current) { exit 0 }
-}
-exit 1
-\""`;
-      const { exec } = require('child_process');
-      return await new Promise((resolve) => {
-        exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
-          if (stdout) console.log('[Focus stdout]', stdout.trim());
-          if (stderr) console.log('[Focus stderr]', stderr.trim());
-          if (err) console.error('[Focus] FAILED for', sessionId, err.message);
-          else console.log('[Focus] OK for', sessionId);
-          resolve(!err);
-        });
-      });
-    } catch (e) {
-      console.error('[Focus] exception:', e.message);
-      return false;
-    }
+      const hwnd = win32.getConsoleWindowForPid(terminalPid)
+        || win32.getConsoleWindowForPid(session.pid);
+      if (!hwnd) { console.log('[Focus] No console window found for', sessionId); return false; }
+      win32.forceRestoreAndFocus(hwnd);
+      console.log('[Focus] OK for', sessionId);
+      return true;
+    } catch (e) { console.error('[Focus] exception:', e.message); return false; }
   }
 
   async sendToSession(sessionId, message) {
     const session = this.sessions.get(sessionId);
-    if (!session) return false;
-
+    if (!session) return { success: false, error: 'Session not found' };
     if (!session.messages) session.messages = [];
-    session.messages.push({
-      role: 'user', content: message, timestamp: new Date().toISOString(),
-    });
+    const newMsg = { role: 'user', content: message, timestamp: new Date().toISOString() };
+    session.messages.push(newMsg);
+    this._lastMsgCount.set(sessionId, session.messages.length);
     session.lastActivity = new Date().toISOString();
-
-    const targetPid = session.pid;
-    const parentPid = session.parentPid || 0;
-    const terminalPid = session.terminalPid || parentPid || targetPid;
-    const escapedMsg = message.replace(/'/g, "''");
-
-    const psScript = `powershell -NoProfile -Command "
-Add-Type -AssemblyName System.Windows.Forms;
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class WinSend {
-  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);
-}
-'@
-function Try-Focus([int]\$pid) {
-  if (-not \$pid -or \$pid -eq 0) { return \$false }
-  \$p = Get-Process -Id \$pid -ErrorAction SilentlyContinue
-  if (-not \$p) { return \$false }
-  if (\$p.MainWindowHandle -ne [IntPtr]::Zero -and [WinSend]::IsWindowVisible(\$p.MainWindowHandle)) {
-    [WinSend]::ShowWindow(\$p.MainWindowHandle, 9) | Out-Null
-    Start-Sleep -Milliseconds 80
-    [WinSend]::SetForegroundWindow(\$p.MainWindowHandle) | Out-Null
-    return \$true
-  }
-  return \$false
-}
-\$terminalPid = ${terminalPid}
-\$parentPid = ${parentPid}
-\$targetPid = ${targetPid}
-\$focused = Try-Focus \$terminalPid
-if (-not \$focused -and \$parentPid -ne \$terminalPid) { \$focused = Try-Focus \$parentPid }
-if (-not \$focused -and \$targetPid -ne \$terminalPid -and \$targetPid -ne \$parentPid) { \$focused = Try-Focus \$targetPid }
-if (-not \$focused) {
-  \$current = \$terminalPid
-  for (\$i = 0; \$i -lt 5; \$i++) {
-    if (-not \$current -or \$current -eq 0) { break }
-    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=\$current\" -ErrorAction SilentlyContinue
-    if (-not \$proc) { break }
-    \$current = [int]\$proc.ParentProcessId
-    \$focused = Try-Focus \$current
-    if (\$focused) { break }
-  }
-}
-if (\$focused) {
-  Start-Sleep -Milliseconds 150;
-  [System.Windows.Forms.Clipboard]::SetText('${escapedMsg}');
-  Start-Sleep -Milliseconds 50;
-  [System.Windows.Forms.SendKeys]::SendWait('^v');
-  Start-Sleep -Milliseconds 100;
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}');
-  Write-Output 'sent'
-} else {
-  Write-Output 'no-window'
-}
-"`;
-    const { exec } = require('child_process');
-    return await new Promise((resolve) => {
-      exec(psScript, { timeout: 10000 }, (err, stdout, stderr) => {
-        if (stdout) console.log('[Send]', stdout.trim(), 'sessionId=' + sessionId);
-        if (stderr) console.error('[Send stderr]', stderr.trim());
-        if (err) console.error('[Send] FAILED for', sessionId, err.message);
-        this.emit('sessions-updated', this.getSessions());
-        resolve(!err);
-      });
+    // Immediately show thinking state on all clients
+    session.status = 'thinking';
+    session._justSent = Date.now();
+    this.emit('sessions-updated', this.getSessions());
+    // Push delta to socket clients immediately (no wait for scan)
+    this.emit('session-messages-changed', {
+      sessionId,
+      messages: session.messages,
+      delta: [newMsg],
+      status: session.status,
     });
+    const terminalPid = session.terminalPid || session.parentPid || session.pid;
+    console.log('[Send] pid=' + session.pid + ' terminal=' + terminalPid + ' msg=' + message.substring(0, 50));
+    try {
+      const wciOk = win32.writeConsoleInput(terminalPid, message);
+      if (!wciOk) {
+        const hwnd = win32.getConsoleWindowForPid(terminalPid)
+          || win32.getConsoleWindowForPid(session.pid);
+        if (!hwnd) { console.log('[Send] No console window for', sessionId); return { success: false, error: '找不到 CMD 窗口' }; }
+        win32.forceRestoreAndFocus(hwnd);
+        clipboard.writeText(message);
+        let s = Date.now(); while (Date.now() - s < 100) {}
+        win32.typeTextViaPaste();
+        console.log('[Send] Fallback paste OK sessionId=' + sessionId);
+        return { success: true };
+      }
+      await new Promise((r) => setTimeout(r, 300));
+      win32.sendEnterToConsole(terminalPid);
+      console.log('[Send] WCI + Enter OK sessionId=' + sessionId);
+      const verified = await this.verifyMessageSent(session, message);
+      if (verified) return { success: true };
+      console.log('[Send] Not seen, retrying Enter for sessionId=' + sessionId);
+      await new Promise((r) => setTimeout(r, 300));
+      win32.sendEnterToConsole(terminalPid);
+      await this.verifyMessageSent(session, message);
+      return { success: true };
+    } catch (e) {
+      console.error('[Send] exception:', e.message);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async verifyMessageSent(session, message) {
+    const cwd = session.cwd;
+    if (!cwd) return true;
+    const projDir = this.findProjectDir(cwd);
+    if (!projDir) return true;
+    const maxWait = 5000;
+    const pollInterval = 500;
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+      try {
+        const files = fs.readdirSync(projDir)
+          .filter(f => f.endsWith('.jsonl'))
+          .map(f => ({ name: f, mtime: fs.statSync(path.join(projDir, f)).mtime }))
+          .sort((a, b) => b.mtime - a.mtime);
+        if (files.length === 0) continue;
+        const latestPath = path.join(projDir, files[0].name);
+        const content = fs.readFileSync(latestPath, 'utf-8');
+        const lines = content.trim().split('\n');
+        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 10); i--) {
+          try {
+            const entry = JSON.parse(lines[i]);
+            const msg = entry.message;
+            if (msg && msg.role === 'user') {
+              let msgContent = '';
+              if (typeof msg.content === 'string') {
+                msgContent = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                msgContent = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join(' ');
+              }
+              if (msgContent.includes(message) || message.includes(msgContent)) {
+                console.log('[Send] Verified: message found in conversation');
+                return true;
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    console.log('[Send] Verification timeout — message not confirmed');
+    return false;
   }
 }
 

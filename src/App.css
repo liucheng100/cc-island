@@ -1,12 +1,15 @@
 /* ============================================
-   CC Island - Global Styles
+   CC Island - Single Window Styles
    ============================================ */
 
 :root {
-  --bg-primary: rgba(18, 18, 24, 0.92);
-  --bg-secondary: rgba(28, 28, 36, 0.94);
-  --bg-card: rgba(38, 38, 48, 0.88);
+  --bg-primary: rgba(18, 18, 24, 0.96);
+  --bg-secondary: rgba(28, 28, 36, 0.97);
+  --bg-card: rgba(38, 38, 48, 0.95);
   --bg-glass: rgba(255, 255, 255, 0.06);
+  --bg-deep: rgba(8, 8, 14, 0.98);
+  --bg-panel-top: rgba(18, 18, 28, 0.98);
+  --bg-panel-bot: rgba(4, 4, 12, 0.99);
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-active: rgba(99, 102, 241, 0.5);
   --text-primary: #f0f0f5;
@@ -23,28 +26,44 @@
   --radius-md: 14px;
   --radius-lg: 20px;
   --radius-xl: 26px;
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
   --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.app {
+/* Light theme */
+[data-theme="light"] {
+  --bg-primary: rgba(248, 248, 252, 0.96);
+  --bg-secondary: rgba(240, 240, 246, 0.97);
+  --bg-card: rgba(255, 255, 255, 0.92);
+  --bg-glass: rgba(0, 0, 0, 0.04);
+  --bg-deep: rgba(232, 232, 240, 0.98);
+  --bg-panel-top: rgba(248, 248, 252, 0.98);
+  --bg-panel-bot: rgba(238, 238, 246, 0.99);
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-active: rgba(99, 102, 241, 0.5);
+  --text-primary: #1a1a2e;
+  --text-secondary: #5a5a72;
+  --text-muted: #9090a0;
+  --accent: #4f46e5;
+  --accent-glow: rgba(79, 70, 229, 0.25);
+  --success: #16a34a;
+  --success-glow: rgba(22, 163, 74, 0.3);
+  --warning: #d97706;
+  --warning-glow: rgba(217, 119, 6, 0.3);
+  --danger: #dc2626;
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+}
+
+/* App container */
+.app-container {
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Island App — single pill */
-.island-app {
-  padding: 0;
-}
-
-/* Sessions App — full panel */
-.sessions-app {
-  padding: 8px;
   align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 
 /* Scrollbar */
@@ -55,35 +74,27 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.08);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.16);
 }
 
 /* Animations */
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 8px var(--accent-glow); }
-  50% { box-shadow: 0 0 20px var(--accent-glow), 0 0 40px rgba(99,102,241,0.2); }
+  0%, 100% { box-shadow: 0 0 8px var(--status-glow); }
+  50% { box-shadow: 0 0 20px var(--status-glow), 0 0 40px var(--status-glow-strong); }
 }
-
-@keyframes pulse-success {
-  0%, 100% { box-shadow: 0 0 4px var(--success-glow); }
-  50% { box-shadow: 0 0 16px var(--success-glow); }
-}
-
-@keyframes slide-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
 @keyframes breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
 }
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes status-bar-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }

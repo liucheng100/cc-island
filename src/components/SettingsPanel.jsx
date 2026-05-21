@@ -14,8 +14,79 @@ function keyToString(e) {
 
 export default function SettingsPanel({ settings, onSave, onBack }) {
   const [recording, setRecording] = useState(false);
+  const [accessPin, setAccessPin] = useState('');
+  const [deviceMode, setDeviceMode] = useState(1);
+  const [approvedDevices, setApprovedDevices] = useState([]);
+  const [pendingDevices, setPendingDevices] = useState([]);
+  const [serverUrl, setServerUrl] = useState('');
+  const [firstDeviceName, setFirstDeviceName] = useState('');
 
   const toggleShortcut = settings.toggleShortcut || '';
+
+  // Load auth state + listen for real-time changes
+  useEffect(() => {
+    if (!window.ccIsland) return;
+    const refresh = async (savedSettings) => {
+      const [pin, mode, devices, pending, info, freshSettings] = await Promise.all([
+        window.ccIsland.getAccessPin(),
+        window.ccIsland.getDeviceMode(),
+        window.ccIsland.getApprovedDevices(),
+        window.ccIsland.getPendingDevices(),
+        window.ccIsland.getServerInfo(),
+        savedSettings ? Promise.resolve(savedSettings) : window.ccIsland.getSettings(),
+      ]);
+      setAccessPin(pin);
+      setDeviceMode(mode);
+      setApprovedDevices(devices || []);
+      setPendingDevices(pending || []);
+      setFirstDeviceName((freshSettings && freshSettings.firstDeviceName) || '');
+      const base = (info && info.publicURL) || `http://${(info && info.localIP) || '127.0.0.1'}:${(info && info.port) || 0}`;
+      setServerUrl(`${base}/session/_?pin=${pin}`);
+    };
+    refresh();
+    const unsub1 = window.ccIsland.onAuthStateChanged(() => refresh());
+    const unsub2 = window.ccIsland.onSettingsChanged((s) => refresh(s));
+    return () => { if (unsub1) unsub1(); if (unsub2) unsub2(); };
+  }, []);
+
+  const handleSetMode = async (mode) => {
+    if (!window.ccIsland) return;
+    await window.ccIsland.setDeviceMode(mode);
+    setDeviceMode(mode);
+  };
+
+  const handleRegeneratePin = async () => {
+    if (!window.ccIsland) return;
+    const newPin = await window.ccIsland.regeneratePin();
+    setAccessPin(newPin);
+    const info = await window.ccIsland.getServerInfo();
+    const base = (info && info.publicURL) || `http://${(info && info.localIP) || '127.0.0.1'}:${(info && info.port) || 0}`;
+    setServerUrl(`${base}/session/_?pin=${newPin}`);
+  };
+
+  const handleResetFirstDevice = async () => {
+    if (!window.ccIsland) return;
+    await window.ccIsland.resetFirstDevice();
+    setFirstDeviceName('');
+  };
+
+  const handleRevokeDevice = async (deviceId) => {
+    if (!window.ccIsland) return;
+    await window.ccIsland.rejectDevice(deviceId);
+    setApprovedDevices(prev => prev.filter(d => d.deviceId !== deviceId));
+  };
+
+  const handleApproveDevice = async (deviceId) => {
+    if (!window.ccIsland) return;
+    await window.ccIsland.approveDevice(deviceId);
+    setPendingDevices(prev => prev.filter(d => d.deviceId !== deviceId));
+  };
+
+  const handleRejectDevice = async (deviceId) => {
+    if (!window.ccIsland) return;
+    await window.ccIsland.rejectDevice(deviceId);
+    setPendingDevices(prev => prev.filter(d => d.deviceId !== deviceId));
+  };
 
   // Document-level keydown listener when recording — captures even Ctrl+Space
   useEffect(() => {
@@ -110,6 +181,127 @@ export default function SettingsPanel({ settings, onSave, onBack }) {
         </div>
 
         <div className="setting-group">
+          <label className="setting-label">公网连接模式</label>
+          <p className="setting-desc">局域网始终可用，以下为附加的公网接入方式</p>
+          <div className="theme-options" style={{ flexWrap: 'wrap' }}>
+            {[
+              { v: '', label: '仅局域网', icon: '🏠', desc: '不外连', disabled: false },
+              { v: 'local', label: '本地隧道', icon: '🔀', desc: '自建反代', disabled: false },
+              { v: 'ssh', label: 'SSH 隧道', icon: '🔗', desc: '即将开放', disabled: true },
+              { v: 'server', label: '服务器', icon: '🖥', desc: '即将开放', disabled: true },
+            ].map(opt => (
+              <button
+                key={opt.v}
+                className={`theme-btn ${(settings.connectMode || '') === opt.v ? 'active' : ''}`}
+                onClick={() => !opt.disabled && onSave({ ...settings, connectMode: opt.v })}
+                style={{ flex: '1 1 60px', padding: '7px 4px', minWidth: 55, opacity: opt.disabled ? 0.35 : 1, cursor: opt.disabled ? 'not-allowed' : 'pointer' }}
+              >
+                <span style={{ fontSize: 16 }}>{opt.icon}</span>
+                <span style={{ fontSize: 9, fontWeight: 600 }}>{opt.label}</span>
+                <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          {(settings.connectMode || '') === 'local' && (
+            <>
+              <input
+                type="text"
+                className="text-input"
+                placeholder="监听地址，如 127.0.0.1:8081"
+                value={settings.customServer || ''}
+                onChange={(e) => onSave({ ...settings, customServer: e.target.value })}
+              />
+              <input
+                type="text"
+                className="text-input"
+                placeholder="公网访问地址，如 https://myserver.com"
+                value={settings.publicBase || ''}
+                onChange={(e) => onSave({ ...settings, publicBase: e.target.value })}
+                style={{ marginTop: 6 }}
+              />
+              {settings.customServer && settings.publicBase && (
+                <p className="setting-desc" style={{ color: 'var(--success)' }}>
+                  公网地址：{settings.publicBase.replace(/\/+$/, '')}/session/xxx
+                </p>
+              )}
+            </>
+          )}
+
+          {(settings.connectMode || '') === 'server' && (
+            <p className="setting-desc">服务器连接模式将在后续版本中开放</p>
+          )}
+        </div>
+
+        <div className="setting-group">
+          <label className="setting-label">安全认证</label>
+          <div className="auth-row">
+            <span className="auth-label">访问密码</span>
+            <span className="auth-value">{accessPin || '---'}</span>
+            <button className="preset-btn" onClick={handleRegeneratePin}>刷新</button>
+          </div>
+
+          <div className="auth-row auth-row-sub">
+            <span className="auth-label">访问链接</span>
+            <span className="auth-value-sub">{serverUrl || '(获取中...)'}</span>
+            <button className="preset-btn" onClick={async () => {
+              try { await navigator.clipboard.writeText(serverUrl); } catch(e) {}
+            }}>复制</button>
+          </div>
+
+          <div className="theme-options" style={{ flexWrap: 'wrap', marginTop: 2 }}>
+            <button className={`theme-btn ${deviceMode === 1 ? 'active' : ''}`} onClick={() => handleSetMode(1)} style={{ flex: 1, minWidth: 70, padding: '8px 6px' }}>
+              <span style={{ fontSize: 18 }}>🔒</span>
+              <span style={{ fontSize: 10 }}>首设备锁定</span>
+            </button>
+            <button className={`theme-btn ${deviceMode === 2 ? 'active' : ''}`} onClick={() => handleSetMode(2)} style={{ flex: 1, minWidth: 70, padding: '8px 6px' }}>
+              <span style={{ fontSize: 18 }}>🛡</span>
+              <span style={{ fontSize: 10 }}>手动审批</span>
+            </button>
+            <button className={`theme-btn ${deviceMode === 3 ? 'active' : ''}`} onClick={() => handleSetMode(3)} style={{ flex: 1, minWidth: 70, padding: '8px 6px' }}>
+              <span style={{ fontSize: 18 }}>🌐</span>
+              <span style={{ fontSize: 10 }}>完全放行</span>
+            </button>
+          </div>
+
+          {deviceMode === 1 && (
+            <div className="auth-row auth-row-sub">
+              <span className="auth-label">首设备</span>
+              <span className="auth-value-sub">{firstDeviceName || '(未绑定)'}</span>
+              <button className="preset-btn preset-clear" onClick={handleResetFirstDevice}>重置</button>
+            </div>
+          )}
+
+          {deviceMode === 2 && (
+            <>
+              {pendingDevices.length > 0 && (
+                <div className="approved-list">
+                  <p className="setting-desc" style={{ marginBottom: 4 }}>待审批设备：</p>
+                  {pendingDevices.map(d => (
+                    <div key={d.deviceId} className="pending-row">
+                      <span className="pending-name" title={d.deviceId}>{d.name || d.deviceId}</span>
+                      <button className="btn-approve" onClick={() => handleApproveDevice(d.deviceId)}>通过</button>
+                      <button className="btn-reject" onClick={() => handleRejectDevice(d.deviceId)}>拒绝</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {approvedDevices.length > 0 && (
+                <div className="approved-list">
+                  <p className="setting-desc" style={{ marginBottom: 4 }}>已批准设备：</p>
+                  {approvedDevices.map(d => (
+                    <div key={d.deviceId} className="pending-row">
+                      <span className="pending-name" title={d.deviceId}>{d.name || d.displayId || d.deviceId}</span>
+                      <button className="btn-reject" onClick={() => handleRevokeDevice(d.deviceId)}>撤销</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="setting-group">
           <label className="setting-label">全局快捷键</label>
           <div className="shortcut-row">
             <span className="shortcut-label">展开/收起灵动岛</span>
@@ -192,6 +384,14 @@ export default function SettingsPanel({ settings, onSave, onBack }) {
         .shortcut-value { font-size: 11px; color: var(--text-primary); font-family: 'Cascadia Code', monospace; }
         .shortcut-input.recording .shortcut-value { color: var(--accent); }
 
+        .setting-desc { font-size: 10px; color: var(--text-muted); margin: -6px 0 0 0; }
+        .text-input {
+          display: block; width: 100%; padding: 6px 10px; border-radius: 6px;
+          border: 1px solid var(--border-subtle); background: var(--bg-glass);
+          color: var(--text-primary); font-size: 11px; outline: none;
+        }
+        .text-input:focus { border-color: var(--border-active); }
+        .text-input::placeholder { color: var(--text-muted); }
         .preset-btn {
           padding: 4px 8px; border-radius: 5px; cursor: pointer;
           border: 1px solid var(--border-subtle); background: var(--bg-glass);
@@ -201,6 +401,33 @@ export default function SettingsPanel({ settings, onSave, onBack }) {
         .preset-btn:hover { border-color: var(--border-active); color: var(--accent); background: rgba(99,102,241,0.08); }
         .preset-clear { color: var(--text-muted); }
         .preset-clear:hover { color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); }
+        .approved-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+        .pending-row {
+          display: flex; align-items: center; gap: 6px;
+          padding: 5px 8px; border-radius: 6px;
+          background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle);
+        }
+        .pending-name { flex: 1; font-size: 10px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .btn-approve {
+          background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3);
+          color: var(--success); font-size: 10px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+          flex-shrink: 0;
+        }
+        .btn-approve:hover { background: rgba(34,197,94,0.2); }
+        .btn-reject {
+          background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2);
+          color: var(--danger); font-size: 10px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+          flex-shrink: 0;
+        }
+        .auth-row {
+          display: flex; align-items: center; gap: 8px;
+          padding: 5px 8px; border-radius: 6px;
+          background: rgba(255,255,255,0.02); border: 1px solid var(--border-subtle);
+        }
+        .auth-label { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
+        .auth-value { font-size: 14px; font-weight: 600; letter-spacing: 3px; font-family: monospace; color: var(--success); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; user-select: text; }
+        .auth-row-sub { border: none; background: transparent; padding: 3px 8px; }
+        .auth-value-sub { font-size: 10px; font-weight: 400; letter-spacing: 0; font-family: monospace; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; user-select: text; }
       `}</style>
     </div>
   );
