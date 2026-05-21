@@ -22,6 +22,7 @@ class SessionMonitor extends EventEmitter {
     this._lastMsgCount = new Map(); // sessionKey → message count, for delta detection
     this.commandQueues = new Map(); // sessionKey → string[]
     this._lastAutoSent = new Map(); // sessionKey → timestamp, prevent duplicate auto-send
+    this._emptyScanStreak = 0; // count consecutive empty scans
   }
 
   // === Command Queue ===
@@ -173,7 +174,13 @@ class SessionMonitor extends EventEmitter {
         }
       }
 
-      // Always cleanup stale sessions (even when no processes found)
+      // Cleanup stale sessions — require 2 consecutive empty scans to prevent false clear
+      if (processes.length === 0) {
+        this._emptyScanStreak++;
+        if (this._emptyScanStreak < 2) return; // first empty scan: skip cleanup, no emit
+      } else {
+        this._emptyScanStreak = 0;
+      }
       for (const [key, session] of this.sessions) {
         if (!currentKeys.has(key)) {
           console.log(`[SessionMonitor] Removed: ${session.name} (${key})`);
@@ -191,62 +198,57 @@ class SessionMonitor extends EventEmitter {
 
   async findClaudeProcesses() {
     return new Promise((resolve) => {
-      const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$filter = "Name='node.exe' OR Name='cmd.exe' OR Name='powershell.exe' OR Name='pwsh.exe' OR Name='claude.exe'"
-$all = Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue
-$results = @()
-foreach ($p in $all) {
-  $cl = if($p.CommandLine) { $p.CommandLine } else { '' }
-  if ($p.Name -ne 'claude.exe' -and $cl.Length -eq 0) { continue }
-  $isClaude = $false
-  if ($cl -match '@anthropic-ai/claude-code' -or $cl -match 'claude-code') { $isClaude = $true }
-  elseif ($cl -match '[\\\\/]claude(\\\\.exe)?[" ]' -or $cl -match '^claude(\\\\.exe)?[" ]') { $isClaude = $true }
-  elseif ($p.Name -eq 'claude.exe') { $isClaude = $true }
-  if ($isClaude) {
-    if ($cl -match 'cc-island|CC Island|Get-CimInstance|Select-Object|ConvertTo-Json') { continue }
-    if ($cl -match 'npm[ -]cli' -or $cl -match 'npm\\s+(view|install|search|info|config|run)') { continue }
-    $results += [PSCustomObject]@{ Pid=$p.ProcessId; ParentPid=$p.ParentProcessId; Name=$p.Name; Cmd=$cl.Substring(0,[Math]::Min(500,$cl.Length)) }
-  }
-}
-$results | ConvertTo-Json -Compress
-`;
-      const tmpFile = path.join(os.tmpdir(), 'cc-island-scan.ps1');
-      try { fs.writeFileSync(tmpFile, psScript, 'utf8'); } catch (e) { resolve([]); return; }
-      exec(`powershell -ExecutionPolicy Bypass -File "${tmpFile}"`, { timeout: 8000 }, (err, stdout) => {
-        try { fs.unlinkSync(tmpFile); } catch (e) {}
-        if (err || !stdout || !stdout.trim()) { this.findClaudeProcessesFallback().then(resolve); return; }
-        try {
-          const data = JSON.parse(stdout.trim());
-          const list = Array.isArray(data) ? data : (data ? [data] : []);
-          resolve(list.map((p) => ({ pid: p.Pid, parentPid: p.ParentPid || 0, terminalPid: 0, name: p.Name || 'claude', cwd: '', commandLine: p.Cmd || '' })));
-        } catch (e) { this.findClaudeProcessesFallback().then(resolve); }
-      });
-    });
-  }
-
-  async findClaudeProcessesFallback() {
-    return new Promise((resolve) => {
-      const cmd = `wmic process where "name='node.exe' or name='cmd.exe' or name='powershell.exe' or name='claude.exe'" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`;
-      exec(cmd, { timeout: 5000 }, (err, stdout) => {
-        if (err || !stdout) { resolve([]); return; }
-        const tasks = [];
-        const lines = stdout.split('\n').filter((l) => l.trim());
+      // Step 1: tasklist via exec (handles encoding, buffers output)
+      exec('tasklist /FO CSV /NH', { timeout: 5000 }, (tlErr, tlOut) => {
+        if (tlErr || !tlOut) { resolve([]); return; }
+        const candidateNames = new Set(['node.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe', 'claude.exe']);
+        const candidates = [];
+        const lines = tlOut.split('\n');
         for (const line of lines) {
-          const firstComma = line.indexOf(',');
-          if (firstComma < 0) continue;
-          const parts = line.substring(firstComma + 1).split(',');
-          if (parts.length < 3) continue;
-          const pid = parts[0].trim(), parentPid = parts[1].trim(), name = parts[2].trim(), cmdLine = parts.slice(3).join(',').trim();
-          if (!pid || isNaN(parseInt(pid))) continue;
-          const isClaude = cmdLine.includes('@anthropic-ai/claude-code') || cmdLine.includes('claude-code')
-            || cmdLine.match(/[\\/]claude(\.exe)?[" ]/) || cmdLine.match(/^claude(\.exe)?[" ]/)
-            || name === 'claude.exe';
-          if (!isClaude) continue;
-          if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island') || cmdLine.includes('.vscode')) continue;
-          tasks.push({ pid: parseInt(pid), parentPid: parseInt(parentPid) || 0, terminalPid: 0, name, cwd: '', commandLine: cmdLine.substring(0, 500) });
+          const m = line.match(/^"([^"]+)","(\d+)"/);
+          if (!m) continue;
+          const name = m[1].toLowerCase();
+          if (!candidateNames.has(name)) continue;
+          candidates.push({ pid: parseInt(m[2]), name: m[1] });
         }
-        resolve(tasks);
+        if (candidates.length === 0) { resolve([]); return; }
+
+        // Step 2: get command lines via single batch wmic query
+        const pidFilter = candidates.map(c => `ProcessId=${c.pid}`).join(' or ');
+        exec(`wmic process where "${pidFilter}" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`, { timeout: 5000 }, (wmicErr, wmicOut) => {
+          if (wmicErr || !wmicOut) { resolve([]); return; }
+          const results = [];
+          const wmicLines = wmicOut.split('\n').filter(l => l.trim());
+          // Parse header to find column positions (wmic reorders columns!)
+          let colIdx = { ProcessId: -1, ParentProcessId: -1, Name: -1, CommandLine: -1 };
+          for (const line of wmicLines) {
+            const firstComma = line.indexOf(',');
+            if (firstComma < 0) continue;
+            const headerPart = line.substring(0, firstComma);
+            if (headerPart === 'Node') {
+              const cols = line.substring(firstComma + 1).split(',');
+              for (let i = 0; i < cols.length; i++) {
+                const h = cols[i].trim();
+                if (colIdx.hasOwnProperty(h)) colIdx[h] = i;
+              }
+              continue;
+            }
+            if (colIdx.ProcessId < 0) continue;
+            const parts = line.substring(firstComma + 1).split(',');
+            const pid = (parts[colIdx.ProcessId] || '').trim();
+            const parentPid = (parts[colIdx.ParentProcessId] || '').trim();
+            const name = (parts[colIdx.Name] || '').trim();
+            const cmdLine = parts.slice(colIdx.CommandLine).join(',').trim();
+            if (!pid || isNaN(parseInt(pid))) continue;
+            const isClaude = cmdLine.includes('@anthropic-ai/claude-code') || cmdLine.includes('claude-code')
+              || cmdLine.match(/[\\/]claude(\.exe)?[" ]/) || cmdLine.match(/^claude(\.exe)?[" ]/)
+              || name.toLowerCase() === 'claude.exe';
+            if (!isClaude) continue;
+            if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island') || cmdLine.includes('.vscode')) continue;
+            results.push({ pid: parseInt(pid), parentPid: parseInt(parentPid) || 0, terminalPid: 0, name, cwd: '', commandLine: cmdLine.substring(0, 500) });
+          }
+          resolve(results);
+        });
       });
     });
   }

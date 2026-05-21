@@ -364,6 +364,10 @@ class LocalServer extends EventEmitter {
           if (!socketAuth(socket)) return;
         });
 
+        socket.on('latency-test', () => {
+          socket.emit('latency-pong');
+        });
+
         socket.on('join-session', (sessionId) => {
           if (!socketAuth(socket)) return;
           socket.join(`session:${sessionId}`);

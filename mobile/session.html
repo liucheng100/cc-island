@@ -279,6 +279,7 @@
         </button>
         <span class="pill" id="wsBadge">连接中</span>
         <span class="pill" id="cntBadge">0</span>
+        <button class="btn-new-session" id="btnNetTest" title="网络延迟测试" style="font-size:11px;padding:2px 6px;">📶</button>
       </div>
     </div>
     <div class="tabs-row">
@@ -789,6 +790,47 @@
     $btnFocus.addEventListener('click', function() { if (selectedId) socket.emit('focus-session', selectedId); });
     $btnNewSession.addEventListener('click', function() {
       socket.emit('new-session', selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
+    });
+
+    // === Network latency test (temporary tool) ===
+    var $btnNetTest = document.getElementById('btnNetTest');
+    var $netPanel = document.createElement('div');
+    $netPanel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;z-index:2000;display:none;min-width:200px;text-align:center;';
+    $netPanel.innerHTML = '<h3 style="margin-bottom:12px;font-size:14px;">网络延迟测试</h3>' +
+      '<div id="netHttpResult" style="margin:8px 0;font-size:13px;">HTTP: --</div>' +
+      '<div id="netWsResult" style="margin:8px 0;font-size:13px;">WebSocket: --</div>' +
+      '<button id="netTestBtn" style="margin:8px 4px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;">测试</button>' +
+      '<button id="netCloseBtn" style="margin:8px 4px;padding:6px 14px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;">关闭</button>';
+    document.body.appendChild($netPanel);
+
+    $btnNetTest.addEventListener('click', function() {
+      $netPanel.style.display = 'block';
+      document.getElementById('netHttpResult').textContent = 'HTTP: --';
+      document.getElementById('netWsResult').textContent = 'WebSocket: --';
+    });
+    document.getElementById('netCloseBtn').addEventListener('click', function() { $netPanel.style.display = 'none'; });
+    document.getElementById('netTestBtn').addEventListener('click', function() {
+      // HTTP test
+      var httpStart = Date.now();
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', '/health');
+      xhr.onload = function() {
+        var httpMs = Date.now() - httpStart;
+        document.getElementById('netHttpResult').textContent = 'HTTP: ' + httpMs + 'ms';
+      };
+      xhr.onerror = function() { document.getElementById('netHttpResult').textContent = 'HTTP: 失败'; };
+      xhr.send();
+
+      // WebSocket test (true round-trip: client→server→client)
+      document.getElementById('netWsResult').textContent = 'WebSocket: 等待中...';
+      var wsStart = Date.now();
+      var wsHandler = function() {
+        var wsMs = Date.now() - wsStart;
+        document.getElementById('netWsResult').textContent = 'WebSocket: ' + wsMs + 'ms';
+        socket.off('latency-pong', wsHandler);
+      };
+      socket.on('latency-pong', wsHandler);
+      socket.emit('latency-test');
     });
 
     // === Command Queue ===
