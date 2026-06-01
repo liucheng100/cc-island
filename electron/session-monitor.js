@@ -324,6 +324,8 @@ class SessionMonitor extends EventEmitter {
               || name.toLowerCase() === 'claude.exe';
             if (!isClaude) continue;
             if (cmdLine.includes('cc-island') || cmdLine.includes('CC Island') || cmdLine.includes('.vscode')) continue;
+            // Filter out Claude Code internal daemon processes (not user-visible sessions)
+            if (cmdLine.includes('--bg-pty-host') || cmdLine.includes('--fork-session') || cmdLine.includes('daemon run')) continue;
             results.push({ pid: parseInt(pid), parentPid: parseInt(parentPid) || 0, terminalPid: 0, name, cwd: '', commandLine: cmdLine.substring(0, 500) });
           }
           resolve(results);
