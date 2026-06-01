@@ -322,7 +322,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
         .dot-more { font-size: 8px; color: var(--text-muted); margin-left: 2px; }
         .wechat-indicator { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; opacity: 0.5; transition: opacity var(--transition); }
         .wechat-indicator.connected { opacity: 1; }
-        .btn-fullscreen { display: flex; align-items: center; color: var(--text-muted); cursor: pointer; padding: 2px; border-radius: 4px; transition: all 0.15s; }
+        .btn-fullscreen { display: flex; align-items: center; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 4px; transition: all 0.15s; pointer-events: auto; }
         .btn-fullscreen:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
         .expand-arrow { display: flex; align-items: center; color: var(--text-muted); transition: transform var(--transition), color 0.3s; }
         .expand-arrow.expanded { transform: rotate(180deg); color: rgba(255,255,255,0.5); }
