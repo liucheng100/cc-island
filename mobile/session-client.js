@@ -93,7 +93,7 @@ SessionClient.prototype = {
   leaveSession: function(id)      { this._emitSocket('leave-session', id); },
   sendMessage: function(id, text) { this._emitSocket('send-message', { sessionId: id, message: text }); },
   focusSession: function(id)      { this._emitSocket('focus-session', id); },
-  newSession: function(cwd)       { this._emitSocket('new-session', cwd || ''); },
+  newSession: function(cwd, opts) { this._emitSocket('new-session', { cwd: cwd || '', options: opts || {} }); },
   pong: function()                { this._emitSocket('pong'); },
   addToQueue: function(id, cmd)   { this._emitSocket('add-to-queue', { sessionId: id, command: cmd }); },
   removeFromQueue: function(id, idx) { this._emitSocket('remove-from-queue', { sessionId: id, index: idx }); },

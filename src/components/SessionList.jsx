@@ -361,13 +361,21 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
-          <button className="btn-settings" onClick={() => {
-            if (window.ccIsland) window.ccIsland.newClaudeSession().catch(() => {});
-          }} title="新建 Claude 会话">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
+          <div className="new-session-wrap" style={{position:'relative'}}>
+            <button className="btn-settings" onClick={(e) => {
+              e.stopPropagation();
+              const menu = e.currentTarget.nextElementSibling;
+              menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+            }} title="新建 Claude 会话" onBlur={(e) => { setTimeout(() => { if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.style.display = 'none'; }, 200); }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <div className="new-session-menu" style={{display:'none',position:'absolute',top:'100%',right:0,zIndex:100,marginTop:4,minWidth:180,background:'var(--bg-card)',border:'1px solid var(--border-subtle)',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',overflow:'hidden'}}>
+              <button className="new-session-opt" style={{display:'block',width:'100%',padding:'8px 12px',border:'none',background:'none',color:'var(--text-primary)',fontSize:11,textAlign:'left',cursor:'pointer'}} onMouseDown={(e) => { e.preventDefault(); if (window.ccIsland) window.ccIsland.newClaudeSession().catch(() => {}); }}>普通模式</button>
+              <button className="new-session-opt" style={{display:'block',width:'100%',padding:'8px 12px',border:'none',background:'none',color:'var(--text-primary)',fontSize:11,textAlign:'left',cursor:'pointer',borderTop:'1px solid var(--border-subtle)'}} onMouseDown={(e) => { e.preventDefault(); if (window.ccIsland) window.ccIsland.newClaudeSession('', {dangerouslySkipPermissions:true}).catch(() => {}); }}>跳过权限 <span style={{display:'block',fontSize:9,color:'var(--text-muted)',marginTop:2}}>--dangerously-skip-permissions</span></button>
+            </div>
+          </div>
           {onOpenSettings && (
             <button className="btn-settings" onClick={() => onOpenSettings()} title="设置">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

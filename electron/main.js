@@ -148,12 +148,13 @@ function setupIPC() {
   ipcMain.handle('cancel-auto-send', (_, sessionId) => { if (sessionMonitor) sessionMonitor.cancelAutoSend(sessionId); });
   ipcMain.handle('reorder-queue', (_, sessionId, from, to) => { if (sessionMonitor) sessionMonitor.reorderQueue(sessionId, from, to); });
 
-  ipcMain.handle('new-claude-session', async (_, cwd) => {
+  ipcMain.handle('new-claude-session', async (_, cwd, options) => {
     const { spawn } = require('child_process');
-    const path = require('path');
     const os = require('os');
     const dir = (cwd && fs.existsSync(cwd)) ? cwd : os.homedir();
-    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
+    const args = ['claude'];
+    if (options && options.dangerouslySkipPermissions) args.push('--dangerously-skip-permissions');
+    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', ...args], {
       cwd: dir,
       detached: true,
       stdio: 'ignore',
@@ -393,10 +394,12 @@ app.whenReady().then(async () => {
     if (sessionMonitor) sessionMonitor.focusSessionWindow(sessionId);
   });
 
-  bus.on('new-claude-session', (cwd) => {
+  bus.on('new-claude-session', (cwd, options) => {
     const { spawn } = require('child_process');
     const dir = (cwd && fs.existsSync(cwd)) ? cwd : require('os').homedir();
-    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
+    const args = ['claude'];
+    if (options && options.dangerouslySkipPermissions) args.push('--dangerously-skip-permissions');
+    const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', ...args], {
       cwd: dir, detached: true, stdio: 'ignore', windowsHide: false,
     });
     child.unref();

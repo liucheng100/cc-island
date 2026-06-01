@@ -403,9 +403,11 @@ class LocalServer extends EventEmitter {
           socket.leave(`session:${sessionId}`);
         });
 
-        socket.on('new-session', (cwd) => {
+        socket.on('new-session', (data) => {
           if (!socketAuth(socket)) return;
-          bus.emit('new-claude-session', cwd);
+          const cwd = typeof data === 'string' ? data : (data && data.cwd) || '';
+          const options = typeof data === 'object' ? data.options || {} : {};
+          bus.emit('new-claude-session', cwd, options);
         });
 
         // Command queue

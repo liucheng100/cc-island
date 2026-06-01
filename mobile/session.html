@@ -215,6 +215,22 @@
       transition: all 0.2s; flex-shrink: 0;
     }
     .btn-new-session:active { background: var(--accent-dim); color: var(--accent); border-color: rgba(124,127,255,0.3); }
+    .new-session-wrap { position: relative; }
+    .new-session-menu {
+      display: none; position: absolute; top: 100%; right: 0; z-index: 100;
+      margin-top: 6px; min-width: 180px;
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+    }
+    .new-session-menu.show { display: block; }
+    .new-session-opt {
+      display: block; width: 100%; padding: 10px 14px; border: none;
+      background: none; color: var(--text); font-size: 13px; text-align: left;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .new-session-opt:active { background: var(--accent-dim); }
+    .new-session-opt + .new-session-opt { border-top: 1px solid var(--border); }
+    .opt-tag { display: block; font-size: 10px; color: var(--text3); margin-top: 2px; }
     /* Queue panel */
     .queue-panel { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--bg2); overflow: hidden; transition: max-height 0.3s ease, opacity 0.3s ease; max-height: 300px; opacity: 1; }
     .queue-panel.collapsed { max-height: 36px; }
@@ -313,9 +329,15 @@
     <div class="header">
       <div class="header-l"><div class="logo">🏝</div><h1>CC Island</h1></div>
       <div class="header-r">
-        <button class="btn-new-session" id="btnNewSession" title="新建 Claude CMD">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-        </button>
+        <div class="new-session-wrap" id="newSessionWrap">
+          <button class="btn-new-session" id="btnNewSession" title="新建 Claude CMD">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <div class="new-session-menu" id="newSessionMenu">
+            <button class="new-session-opt" data-mode="normal">普通模式</button>
+            <button class="new-session-opt" data-mode="skip">跳过权限 <span class="opt-tag">--dangerously-skip-permissions</span></button>
+          </div>
+        </div>
         <span class="pill" id="wsBadge">连接中</span>
         <span class="pill" id="cntBadge">0</span>
       </div>
@@ -881,8 +903,20 @@
       selectedId = null; hideDetail(); renderTabs();
     });
     $btnFocus.addEventListener('click', function() { if (selectedId) client.focusSession(selectedId); });
-    $btnNewSession.addEventListener('click', function() {
-      client.newSession(selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
+    // New session — show mode menu
+    var $newSessionMenu = document.getElementById('newSessionMenu');
+    $btnNewSession.addEventListener('click', function(e) {
+      e.stopPropagation();
+      $newSessionMenu.classList.toggle('show');
+    });
+    document.addEventListener('click', function() { $newSessionMenu.classList.remove('show'); });
+    $newSessionMenu.addEventListener('click', function(e) {
+      var btn = e.target.closest('.new-session-opt');
+      if (!btn) return;
+      $newSessionMenu.classList.remove('show');
+      var cwd = selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '';
+      var skip = btn.getAttribute('data-mode') === 'skip';
+      client.newSession(cwd, skip ? { dangerouslySkipPermissions: true } : {});
     });
 
     // === Command Queue (new design) ===

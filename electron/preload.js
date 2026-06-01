@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('ccIsland', {
   startTunnel: () => ipcRenderer.invoke('start-tunnel'),
   stopTunnel: () => ipcRenderer.invoke('stop-tunnel'),
   hasCustomServer: () => ipcRenderer.invoke('has-custom-server'),
-  newClaudeSession: (cwd) => ipcRenderer.invoke('new-claude-session', cwd),
+  newClaudeSession: (cwd, options) => ipcRenderer.invoke('new-claude-session', cwd, options),
   // Auth
   getAccessPin: () => ipcRenderer.invoke('get-access-pin'),
   getDeviceMode: () => ipcRenderer.invoke('get-device-mode'),
