@@ -616,10 +616,7 @@
           if (data.messages) {
             saveMsgCache(data.sessionId, { messages: data.messages, count: data.messages.length, status: data.status });
           }
-          var s = allSessions.find(function(s){return s.id===selectedId});
-          var st = data.status || (s ? s.status : null);
-          if (s) updateDetailHeader(s);
-          addThinkDot(st ? { status: st } : s);
+          // Status and think dots are handled by sessions-updated — don't override here
           if (followBottom) scrollToBottom();
         }
       }
