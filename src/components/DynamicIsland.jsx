@@ -75,11 +75,12 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
   }, [activeSession]);
 
   const handleMouseDown = useCallback((e) => {
+    // Don't start drag if clicking a button
+    if (e.target.closest('.btn-fullscreen')) return;
     dragRef.current.dragging = true;
     dragRef.current.startX = e.screenX;
     dragRef.current.startY = e.screenY;
     dragRef.current.moved = false;
-    dragRef.current.buttonClicked = false;
     setIsDragging(true);
   }, []);
 
@@ -99,16 +100,14 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
       if (!dragRef.current.dragging) return;
       dragRef.current.dragging = false;
       setIsDragging(false);
-      if (!dragRef.current.moved && !dragRef.current.buttonClicked) onClick();
+      if (!dragRef.current.moved) onClick();
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [onClick]);
 
-  const handleToggleFullscreen = useCallback((e) => {
-    e.stopPropagation();
-    dragRef.current.buttonClicked = true;
+  const handleToggleFullscreen = useCallback(() => {
     if (window.ccIsland) window.ccIsland.toggleFullscreen().then(setIsFullscreen);
   }, []);
 
