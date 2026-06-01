@@ -13,6 +13,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('sessions');
   const [settings, setSettings] = useState({ theme: 'dark' });
   const prevStatusRef = useRef({});
+  const seenIdsRef = useRef(new Set());
   const settingsRef = useRef(settings);
   const settingsLoadedRef = useRef(false);
   const isExpandedRef = useRef(false);
@@ -65,7 +66,8 @@ export default function App() {
       const prev = prevStatusRef.current;
 
       for (const s of list) {
-        if (!prev[s.id] && settingsRef.current.soundNewTask !== false) { playNewSessionSound(); }
+        if (!seenIdsRef.current.has(s.id) && settingsRef.current.soundNewTask !== false) { playNewSessionSound(); }
+        seenIdsRef.current.add(s.id);
         if (prev[s.id] && (prev[s.id] === 'answering' || prev[s.id] === 'thinking') && s.status === 'completed') {
           if (settingsRef.current.soundCompletion !== false) playCompletionSound();
           if (window.ccIsland && !isExpandedRef.current) {
