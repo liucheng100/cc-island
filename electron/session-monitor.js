@@ -730,6 +730,8 @@ Write-Output ($alive -join ',')
     if (!session) return { success: false, error: 'Session not found' };
     if (!session.messages) session.messages = [];
     const entry = this.msgStore.appendMessage(sessionId, { role: 'user', content: message, timestamp: new Date().toISOString() });
+    // Prevent scan from re-emitting this message when the file updates
+    this.msgStore.markClean(sessionId);
     session.messages = this.msgStore.getMessages(sessionId);
     session.lastActivity = new Date().toISOString();
     session.status = 'thinking';
