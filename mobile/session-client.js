@@ -40,6 +40,7 @@ SessionClient.prototype = {
     s.on('auth-error', function(data) { self._emit('auth-error', data); });
     s.on('send-error', function(data) { self._emit('send-error', data); });
     s.on('latency-pong', function() { self._emit('latency-pong'); });
+    s.on('queue-auto-ready', function(data) { self._emit('queue-auto-ready', data); });
   },
 
   // ===== Event subscription (UI binds here) =====
@@ -96,6 +97,9 @@ SessionClient.prototype = {
   addToQueue: function(id, cmd)   { this._emitSocket('add-to-queue', { sessionId: id, command: cmd }); },
   removeFromQueue: function(id, idx) { this._emitSocket('remove-from-queue', { sessionId: id, index: idx }); },
   clearQueue: function(id)        { this._emitSocket('clear-queue', id); },
+  reorderQueue: function(id, from, to) { this._emitSocket('reorder-queue', { sessionId: id, from: from, to: to }); },
+  setAutoPlay: function(id, enabled) { this._emitSocket('set-auto-play', { sessionId: id, enabled: enabled }); },
+  sendNextFromQueue: function(id) { this._emitSocket('send-next-from-queue', id); },
   requestQueue: function(id)      { this._emitSocket('get-queue', id); },
   latencyTest: function()         { this._emitSocket('latency-test'); }
 };

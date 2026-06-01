@@ -34,10 +34,14 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   const [isSending, setIsSending] = useState(false);
   const [pendingSend, setPendingSend] = useState(false);
   const [sendError, setSendError] = useState(null);
-  const [optimisticMsg, setOptimisticMsg] = useState(null); // { text, ts } shown instantly
+  const [optimisticMsg, setOptimisticMsg] = useState(null);
   const [cmdQueue, setCmdQueue] = useState([]);
-  const [queueInput, setQueueInput] = useState('');
-  const [showQueue, setShowQueue] = useState(false);
+  const [queueMode, setQueueMode] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(true);
+  const [countdown, setCountdown] = useState(0); // seconds remaining, 0 = inactive
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const [queueDragIdx, setQueueDragIdx] = useState(-1);
+  const [queueDragOverIdx, setQueueDragOverIdx] = useState(-1);
   const [tabOrder, setTabOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('cc-island-tab-order');
@@ -167,15 +171,29 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   })();
   const isActive = selectedSession && selectedSession.status !== 'disconnected' && selectedSession.status !== 'error';
 
-  // Load command queue when selected session changes
+  // Load command queue and autoPlay when selected session changes
   useEffect(() => {
-    if (!selectedId || !window.ccIsland) { setCmdQueue([]); return; }
+    if (!selectedId || !window.ccIsland) { setCmdQueue([]); setAutoPlay(false); return; }
     window.ccIsland.getQueue(selectedId).then(q => setCmdQueue(q || []));
-    const unsub = window.ccIsland.onQueueUpdated((data) => {
-      if (data.sessionId === selectedId) setCmdQueue(data.queue || []);
+    window.ccIsland.getAutoPlay(selectedId).then(ap => { const on = ap !== false; setAutoPlay(on); if (on) window.ccIsland.setAutoPlay(selectedId, true); });
+    const unsub1 = window.ccIsland.onQueueUpdated((data) => {
+      if (data.sessionId === selectedId) {
+        setCmdQueue(data.queue || []);
+        if (data.autoPlay !== undefined) setAutoPlay(data.autoPlay);
+      }
     });
-    return () => { if (unsub) unsub(); };
+    const unsub2 = window.ccIsland.onQueueAutoReady((data) => {
+      if (data.sessionId === selectedId) setCountdown(2);
+    });
+    return () => { if (unsub1) unsub1(); if (unsub2) unsub2(); };
   }, [selectedId]);
+
+  // Countdown display only — backend handles actual send
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const t = setTimeout(() => setCountdown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
 
   // Clear optimistic message when server confirms (via sessions update)
   useEffect(() => {
@@ -417,6 +435,78 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                   <div className="thinking-dots"><i>.</i><i>.</i><i>.</i></div>
                 )}
               </div>
+              {/* Queue mode panel */}
+              {queueMode && (
+                <div className={`queue-panel ${queueCollapsed ? 'collapsed' : ''}`}>
+                  <div className="queue-panel-hdr">
+                    <span onClick={() => setQueueCollapsed(!queueCollapsed)} style={{cursor:'pointer',flex:1}}>指令队列 ({cmdQueue.length})</span>
+                    <div className="queue-panel-actions">
+                      <button className={`btn-autoplay ${autoPlay ? 'on' : ''}`} onClick={(e) => {
+                        e.stopPropagation();
+                        const v = !autoPlay;
+                        setAutoPlay(v);
+                        if (window.ccIsland) window.ccIsland.setAutoPlay(selectedId, v);
+                        if (!v) setCountdown(0);
+                      }} title={autoPlay ? '暂停' : '自动'}>{autoPlay ? '⏸' : '▶'}</button>
+                      <button className="queue-collapse-btn" onClick={(e) => { e.stopPropagation(); setQueueCollapsed(!queueCollapsed); }} title={queueCollapsed ? '展开' : '收起'}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: queueCollapsed ? 'rotate(-90deg)' : 'rotate(90deg)' }}><path d="M6 9l6 6 6-6"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  {!queueCollapsed && (
+                    <div className="queue-panel-list">
+                      {cmdQueue.map((cmd, i) => (
+                        <div key={i}
+                          className={`queue-cmd ${queueDragIdx === i ? 'dragging' : ''} ${queueDragOverIdx === i ? 'drag-over' : ''}`}
+                          draggable
+                          onDragStart={(e) => {
+                            setQueueDragIdx(i);
+                            e.dataTransfer.effectAllowed = 'move';
+                            e.dataTransfer.setData('text/plain', String(i));
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            setQueueDragOverIdx(i);
+                          }}
+                          onDragLeave={() => setQueueDragOverIdx(-1)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const from = queueDragIdx;
+                            const to = i;
+                            setQueueDragIdx(-1);
+                            setQueueDragOverIdx(-1);
+                            if (from !== to && from >= 0 && to >= 0 && window.ccIsland) {
+                              window.ccIsland.reorderQueue(selectedId, from, to);
+                            }
+                          }}
+                          onDragEnd={() => { setQueueDragIdx(-1); setQueueDragOverIdx(-1); }}
+                          onTouchStart={() => setQueueDragIdx(i)}
+                          onTouchEnd={(e) => {
+                            if (queueDragIdx >= 0 && queueDragIdx !== i && window.ccIsland) {
+                              window.ccIsland.reorderQueue(selectedId, queueDragIdx, i);
+                            }
+                            setQueueDragIdx(-1);
+                            setQueueDragOverIdx(-1);
+                          }}
+                        >
+                          <span className={`queue-cmd-idx ${i === 0 && countdown > 0 ? 'countdown' : ''}`} title={i === 0 ? '下一条执行' : '第' + (i + 1) + '条'}>{i === 0 && countdown > 0 ? countdown + 's' : i === 0 ? '▶' : i + 1}</span>
+                          <span className="queue-cmd-text" title={cmd}>{cmd}</span>
+                          <button className="queue-cmd-send" onClick={() => {
+                            if (window.ccIsland) {
+                              window.ccIsland.removeFromQueue(selectedId, i);
+                              window.ccIsland.sendToSession(selectedId, cmd);
+                            }
+                          }} title="立即发送">▶</button>
+                          <button className="queue-cmd-del" onClick={() => window.ccIsland && window.ccIsland.removeFromQueue(selectedId, i)}>×</button>
+                        </div>
+                      ))}
+                      {cmdQueue.length === 0 && <div className="queue-cmd-empty">队列为空</div>}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Countdown shown on first queue item + cancel via pause/mode switch */}
               <div className="conv-input">
                 {isExpanded && showTips && <span className="kb-tip tip-enter">Enter 发送</span>}
                 <input
@@ -426,56 +516,47 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                   placeholder={isActive ? '输入指令...' : '会话已结束'}
                   value={curInput}
                   onChange={(e) => setInputValues((prev) => ({ ...prev, [selectedSession.id]: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSend(); } }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (queueMode) {
+                        if (!curInput.trim()) return;
+                        if (window.ccIsland) window.ccIsland.addToQueue(selectedId, curInput.trim());
+                        setInputValues((prev) => ({ ...prev, [selectedSession.id]: '' }));
+                      } else {
+                        handleSend();
+                      }
+                    }
+                  }}
                   onFocus={() => onFocusChange && onFocusChange(true)}
                   onBlur={() => onFocusChange && onFocusChange(false)}
                   disabled={!isActive || isSending}
                 />
-                <button className="btn-send" onClick={handleSend} disabled={!isActive || !curInput.trim() || isSending}>
-                  发送
-                </button>
-              </div>
-              {sendError && <div className="send-error">{sendError}</div>}
-              {/* Command Queue */}
-              <div className="cmd-queue">
-                <div className="cmd-queue-toggle" onClick={() => setShowQueue(!showQueue)}>
-                  <span>指令队列 ({cmdQueue.length})</span>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: showQueue ? 'rotate(180deg)' : '' }}>
-                    <path d="M6 9l6 6 6-6" />
-                  </svg>
-                </div>
-                {showQueue && (
-                  <div className="cmd-queue-body">
-                    {cmdQueue.map((cmd, i) => (
-                      <div key={i} className="cmd-queue-item">
-                        <span className="cmd-queue-text">{cmd}</span>
-                        <button className="cmd-queue-del" onClick={() => window.ccIsland && window.ccIsland.removeFromQueue(selectedId, i)}>×</button>
-                      </div>
-                    ))}
-                    <div className="cmd-queue-add">
-                      <input
-                        value={queueInput}
-                        onChange={(e) => setQueueInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && queueInput.trim()) {
-                            if (window.ccIsland) window.ccIsland.addToQueue(selectedId, queueInput.trim());
-                            setQueueInput('');
-                          }
-                        }}
-                        placeholder="添加指令..."
-                      />
-                      <button onClick={() => {
-                        if (!queueInput.trim()) return;
-                        if (window.ccIsland) window.ccIsland.addToQueue(selectedId, queueInput.trim());
-                        setQueueInput('');
-                      }}>+</button>
-                    </div>
-                    {cmdQueue.length > 0 && (
-                      <button className="cmd-queue-clear" onClick={() => window.ccIsland && window.ccIsland.clearQueue(selectedId)}>清空队列</button>
-                    )}
-                  </div>
+                {isActive && (
+                  <button className="btn-queue-mode" onClick={() => {
+                    const next = !queueMode;
+                    setQueueMode(next);
+                    setCountdown(0);
+                    if (!next) { setAutoPlay(false); if (window.ccIsland) window.ccIsland.setAutoPlay(selectedId, false); }
+                  }} title={queueMode ? '切换为正常模式' : '切换为队列模式'}>
+                    {queueMode ? '📋' : '📋'}
+                  </button>
+                )}
+                {isActive && queueMode ? (
+                  <button className="btn-send" onClick={() => {
+                    if (!curInput.trim()) return;
+                    if (window.ccIsland) window.ccIsland.addToQueue(selectedId, curInput.trim());
+                    setInputValues((prev) => ({ ...prev, [selectedSession.id]: '' }));
+                  }} disabled={!curInput.trim() || isSending}>
+                    +Q
+                  </button>
+                ) : (
+                  <button className="btn-send" onClick={handleSend} disabled={!isActive || !curInput.trim() || isSending}>
+                    发送
+                  </button>
                 )}
               </div>
+              {sendError && <div className="send-error">{sendError}</div>}
             </>
           ) : (
             <div className="conv-empty">
@@ -740,43 +821,32 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
           border-radius: 6px; font-size: 10px; color: #ef4444;
         }
-        .cmd-queue { margin: 0 12px 4px; flex-shrink: 0; }
-        .cmd-queue-toggle {
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 4px 8px; cursor: pointer; font-size: 9px; color: var(--text-muted);
-          border-radius: 4px; transition: background 0.15s;
-        }
-        .cmd-queue-toggle:hover { background: rgba(255,255,255,0.03); }
-        .cmd-queue-body { padding: 4px 0; display: flex; flex-direction: column; gap: 3px; }
-        .cmd-queue-item {
-          display: flex; align-items: center; gap: 4px;
-          padding: 3px 8px; background: rgba(99,102,241,0.06);
-          border-radius: 4px; font-size: 10px; color: var(--text-primary);
-        }
-        .cmd-queue-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .cmd-queue-del {
-          background: none; border: none; color: var(--text-muted); cursor: pointer;
-          font-size: 12px; padding: 0 2px; line-height: 1;
-        }
-        .cmd-queue-del:hover { color: var(--danger); }
-        .cmd-queue-add {
-          display: flex; gap: 4px;
-        }
-        .cmd-queue-add input {
-          flex: 1; min-width: 0; padding: 3px 8px; border-radius: 4px;
-          background: rgba(255,255,255,0.04); border: 1px solid var(--border-subtle);
-          font-size: 10px; color: var(--text-primary); outline: none;
-        }
-        .cmd-queue-add input:focus { border-color: var(--border-active); }
-        .cmd-queue-add button {
-          background: var(--accent); border: none; border-radius: 4px;
-          color: #fff; font-size: 12px; padding: 2px 8px; cursor: pointer;
-        }
-        .cmd-queue-clear {
-          background: none; border: none; color: var(--text-muted); cursor: pointer;
-          font-size: 9px; padding: 2px 0; text-align: left;
-        }
-        .cmd-queue-clear:hover { color: var(--danger); }
+        .queue-panel { margin: 0; border-top: 1px solid var(--border); background: var(--bg2); overflow: hidden; transition: max-height 0.25s ease, opacity 0.25s ease; max-height: 300px; opacity: 1; }
+        .queue-panel.collapsed { max-height: 30px; }
+        .queue-panel-hdr { display: flex; align-items: center; justify-content: space-between; padding: 3px 14px; font-size: 10px; color: var(--text-muted); user-select: none; }
+        .queue-panel-hdr:hover { background: rgba(255,255,255,0.01); }
+        .queue-panel-actions { display: flex; align-items: center; gap: 4px; }
+        .btn-autoplay { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 3px; border-radius: 3px; opacity: 0.5; transform: scale(0.9); }
+        .btn-autoplay:hover { opacity: 1; }
+        .btn-autoplay.on { color: var(--success); opacity: 1; }
+        .queue-collapse-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px; opacity: 0.4; }
+        .queue-collapse-btn:hover { opacity: 0.8; }
+        .queue-panel-list { padding: 2px 12px 6px; display: flex; flex-direction: column; gap: 2px; max-height: 120px; overflow-y: auto; }
+        .queue-cmd { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 4px; cursor: grab; transition: all 0.15s; }
+        .queue-cmd:hover { background: rgba(255,255,255,0.03); }
+        .queue-cmd.dragging { opacity: 0.3; }
+        .queue-cmd.drag-over { background: rgba(99,102,241,0.08); }
+        .queue-cmd-idx { font-size: 9px; color: var(--text-muted); flex-shrink: 0; width: 18px; text-align: center; }
+        .queue-cmd-idx.countdown { color: var(--warning); font-weight: 600; }
+        .queue-cmd-text { flex: 1; font-size: 10px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .queue-cmd-send { background: none; border: none; color: var(--success); cursor: pointer; font-size: 10px; padding: 2px; border-radius: 3px; opacity: 0.4; transition: all 0.15s; }
+        .queue-cmd-send:hover { opacity: 1; }
+        .queue-cmd-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px; border-radius: 3px; opacity: 0.3; transition: all 0.15s; }
+        .queue-cmd-del:hover { opacity: 1; color: var(--danger); }
+        .queue-cmd-empty { text-align: center; font-size: 10px; color: var(--text-muted); padding: 6px; }
+        .btn-queue-mode { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 4px; border-radius: 4px; opacity: 0.5; transition: all 0.15s; }
+        .btn-queue-mode:hover { opacity: 0.8; }
+        .btn-queue-mode.active { color: var(--accent); opacity: 1; }
       `}</style>
     </div>
   );

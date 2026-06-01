@@ -36,10 +36,19 @@ contextBridge.exposeInMainWorld('ccIsland', {
   addToQueue: (sessionId, cmd) => ipcRenderer.invoke('add-to-queue', sessionId, cmd),
   removeFromQueue: (sessionId, index) => ipcRenderer.invoke('remove-from-queue', sessionId, index),
   clearQueue: (sessionId) => ipcRenderer.invoke('clear-queue', sessionId),
+  setAutoPlay: (sessionId, enabled) => ipcRenderer.invoke('set-auto-play', sessionId, enabled),
+  getAutoPlay: (sessionId) => ipcRenderer.invoke('get-auto-play', sessionId),
+  sendNextFromQueue: (sessionId) => ipcRenderer.invoke('send-next-from-queue', sessionId),
+  reorderQueue: (sessionId, from, to) => ipcRenderer.invoke('reorder-queue', sessionId, from, to),
   onQueueUpdated: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on('queue-updated', handler);
     return () => ipcRenderer.removeListener('queue-updated', handler);
+  },
+  onQueueAutoReady: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on('queue-auto-ready', handler);
+    return () => ipcRenderer.removeListener('queue-auto-ready', handler);
   },
 
   // Pure JS window drag — no -webkit-app-region needed

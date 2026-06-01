@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
 const { EventEmitter } = require('events');
+const bus = require('./message-bus');
 
 class LocalServer extends EventEmitter {
   constructor(config = {}) {
@@ -47,9 +48,14 @@ class LocalServer extends EventEmitter {
   }
 
   onQueueUpdated(data) {
-    // WS only sends trigger signal — client fetches data via HTTP
     if (this.io && data && data.sessionId) {
-      this.io.emit('queue-changed', { sessionId: data.sessionId });
+      this.io.emit('queue-changed', { sessionId: data.sessionId, autoPlay: data.autoPlay });
+    }
+  }
+
+  onQueueAutoReady(data) {
+    if (this.io && data && data.sessionId) {
+      this.io.to(`session:${data.sessionId}`).emit('queue-auto-ready', data);
     }
   }
 
@@ -91,7 +97,7 @@ class LocalServer extends EventEmitter {
       existing.approvedDevices = Object.fromEntries(this.approvedDevices);
       fs.writeFileSync(sp, JSON.stringify(existing, null, 2), 'utf-8');
     } catch (e) {}
-    this.emit('auth-state-changed');
+    bus.emit('auth-state-changed');
   }
 
   getAccessPin() { return this.accessPin; }
@@ -167,7 +173,7 @@ class LocalServer extends EventEmitter {
       // Add to pending if not already
       if (!this.pendingDevices.has(deviceId)) {
         this.pendingDevices.set(deviceId, { name: deviceName || deviceId.substring(0, 8), createdAt: new Date().toISOString() });
-        this.emit('auth-state-changed');
+        bus.emit('auth-state-changed');
       }
       return false;
     }
@@ -240,9 +246,9 @@ class LocalServer extends EventEmitter {
       // === Queue API ===
       this.app.get('/api/queue/:id', authGuard, (req, res) => {
         if (this.getQueueForSession) {
-          res.json({ queue: this.getQueueForSession(req.params.id) });
+          res.json({ queue: this.getQueueForSession(req.params.id), autoPlay: this.getAutoPlayForSession ? this.getAutoPlayForSession(req.params.id) : false });
         } else {
-          res.json({ queue: [] });
+          res.json({ queue: [], autoPlay: false });
         }
       });
 
@@ -283,7 +289,7 @@ class LocalServer extends EventEmitter {
       this.app.post('/api/sessions/:id/message', authGuard, express.json(), (req, res) => {
         const { message } = req.body;
         if (!message) return res.status(400).json({ error: 'Message required' });
-        this.emit('session-message', req.params.id, message);
+        bus.emit('session-message', req.params.id, message);
         res.json({ success: true });
       });
 
@@ -300,7 +306,7 @@ class LocalServer extends EventEmitter {
       });
 
       this.app.post('/wechat', express.text({ type: '*/*' }), (req, res) => {
-        this.emit('wechat-message', req.body);
+        bus.emit('wechat-message', req.body);
         res.send('success');
       });
 
@@ -365,13 +371,14 @@ class LocalServer extends EventEmitter {
         });
 
         socket.on('latency-test', () => {
+          if (!socketAuth(socket)) return;
           socket.emit('latency-pong');
         });
 
         socket.on('join-session', (sessionId) => {
           if (!socketAuth(socket)) return;
           socket.join(`session:${sessionId}`);
-          this.emit('get-queue-resp', socket, sessionId);
+          bus.emit('get-queue-resp', socket, sessionId);
         });
 
         socket.on('send-message', (data) => {
@@ -380,12 +387,12 @@ class LocalServer extends EventEmitter {
             socket.emit('send-error', { sessionId: data.sessionId, error: '会话已断开' });
             return;
           }
-          this.emit('session-message', data.sessionId, data.message);
+          bus.emit('session-message', data.sessionId, data.message);
         });
 
         socket.on('focus-session', (sessionId) => {
           if (!socketAuth(socket)) return;
-          this.emit('focus-session', sessionId);
+          bus.emit('focus-session', sessionId);
         });
 
         socket.on('leave-session', (sessionId) => {
@@ -394,25 +401,37 @@ class LocalServer extends EventEmitter {
 
         socket.on('new-session', (cwd) => {
           if (!socketAuth(socket)) return;
-          this.emit('new-claude-session', cwd);
+          bus.emit('new-claude-session', cwd);
         });
 
         // Command queue
         socket.on('get-queue', (sessionId, cb) => {
           if (!socketAuth(socket)) return;
-          this.emit('get-queue-resp', socket, sessionId);
+          bus.emit('get-queue-resp', socket, sessionId);
         });
         socket.on('add-to-queue', (data) => {
           if (!socketAuth(socket)) return;
-          this.emit('add-to-queue', data.sessionId, data.command);
+          bus.emit('add-to-queue', data.sessionId, data.command);
         });
         socket.on('remove-from-queue', (data) => {
           if (!socketAuth(socket)) return;
-          this.emit('remove-from-queue', data.sessionId, data.index);
+          bus.emit('remove-from-queue', data.sessionId, data.index);
         });
         socket.on('clear-queue', (sessionId) => {
           if (!socketAuth(socket)) return;
-          this.emit('clear-queue', sessionId);
+          bus.emit('clear-queue', sessionId);
+        });
+        socket.on('reorder-queue', (data) => {
+          if (!socketAuth(socket)) return;
+          bus.emit('reorder-queue', data.sessionId, data.from, data.to);
+        });
+        socket.on('set-auto-play', (data) => {
+          if (!socketAuth(socket)) return;
+          bus.emit('set-auto-play', data.sessionId, data.enabled);
+        });
+        socket.on('send-next-from-queue', (sessionId) => {
+          if (!socketAuth(socket)) return;
+          bus.emit('send-next-from-queue', sessionId);
         });
 
         socket.on('disconnect', () => {
