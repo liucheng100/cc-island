@@ -79,6 +79,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     dragRef.current.startX = e.screenX;
     dragRef.current.startY = e.screenY;
     dragRef.current.moved = false;
+    dragRef.current.buttonClicked = false;
     setIsDragging(true);
   }, []);
 
@@ -98,7 +99,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
       if (!dragRef.current.dragging) return;
       dragRef.current.dragging = false;
       setIsDragging(false);
-      if (!dragRef.current.moved) onClick();
+      if (!dragRef.current.moved && !dragRef.current.buttonClicked) onClick();
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -107,6 +108,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
 
   const handleToggleFullscreen = useCallback((e) => {
     e.stopPropagation();
+    dragRef.current.buttonClicked = true;
     if (window.ccIsland) window.ccIsland.toggleFullscreen().then(setIsFullscreen);
   }, []);
 
