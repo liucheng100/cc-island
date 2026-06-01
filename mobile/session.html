@@ -748,6 +748,8 @@
       followBottom = true;
       if (!id) { hideDetail(); renderTabs(); return; }
       client.joinSession(id);
+      // Sync queue mode from backend
+      client.getQueueMode(id, function(v) { applyQueueMode(!!v); });
       showDetail();
       renderTabs();
       $msgList.innerHTML = '';
@@ -777,15 +779,6 @@
     }
 
     var queueMode = false;
-    try { queueMode = sessionStorage.getItem('cc-queue-mode') === '1'; } catch(e) {}
-    // Apply persisted queue mode UI
-    if (queueMode) {
-      $btnQueueMode.className = 'btn-queue-mode active';
-      $sendBtn.style.background = 'rgba(99,102,241,0.15)';
-      $sendBtn.style.color = 'var(--accent)';
-      $sendBtn.innerHTML = '+Q';
-      $msgInput.placeholder = '输入指令加入队列...';
-    }
     var autoPlay = true;
     var countdown = 0;
     var countdownTimer = null;
@@ -861,19 +854,23 @@
       if (show) setTimeout(function() { $searchInput.focus(); }, 100);
       else { $searchInput.value = ''; renderTabs(); }
     });
-    // Queue mode toggle
+    // Queue mode — sync UI with backend state
+    function applyQueueMode(on) {
+      queueMode = on;
+      $btnQueueMode.className = 'btn-queue-mode' + (on ? ' active' : '');
+      $sendBtn.style.background = on ? 'rgba(99,102,241,0.15)' : '';
+      $sendBtn.style.color = on ? 'var(--accent)' : '';
+      $sendBtn.innerHTML = on ? '+Q' : '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z\"/></svg>';
+      $queuePanel.style.display = on ? 'block' : 'none';
+      $msgInput.placeholder = on ? '输入指令加入队列...' : '输入指令...';
+    }
     $btnQueueMode.addEventListener('click', function() {
-      queueMode = !queueMode;
-      try { sessionStorage.setItem('cc-queue-mode', queueMode ? '1' : '0'); } catch(e) {}
-      $btnQueueMode.className = 'btn-queue-mode' + (queueMode ? ' active' : '');
-      $sendBtn.style.background = queueMode ? 'rgba(99,102,241,0.15)' : '';
-      $sendBtn.style.color = queueMode ? 'var(--accent)' : '';
-      $sendBtn.innerHTML = queueMode ? '+Q' : '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z\"/></svg>';
-      $queuePanel.style.display = queueMode ? 'block' : 'none';
-      $msgInput.placeholder = queueMode ? '输入指令加入队列...' : '输入指令...';
+      var next = !queueMode;
+      client.setQueueMode(selectedId, next);
+      applyQueueMode(next);
       if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
       countdown = 0; fetchQueue();
-      if (!queueMode) { autoPlay = false; $btnAutoPlay.className = 'btn-autoplay'; $btnAutoPlay.textContent = '▶'; client.setAutoPlay(selectedId, false); }
+      if (!next) { autoPlay = false; $btnAutoPlay.className = 'btn-autoplay'; $btnAutoPlay.textContent = '▶'; client.setAutoPlay(selectedId, false); }
     });
     // Events
     $searchInput.addEventListener('input', renderTabs);
@@ -918,7 +915,7 @@
       });
     };
     function fetchQueue() { if (!selectedId) return; client.getQueue(selectedId, function(r) { if (r) { renderQueue(r.queue || [], r.autoPlay); if (r.autoPlay !== undefined) { autoPlay = r.autoPlay; $btnAutoPlay.textContent = autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (autoPlay ? ' on' : ''); if (autoPlay && queueMode) { true; client.setAutoPlay(selectedId, true); } else { ; } } else { ; } } }); }
-    client.on('queue-changed', function(data) { if (data.sessionId !== selectedId) return; fetchQueue(); if (data.autoPlay !== undefined) { autoPlay = data.autoPlay; $btnAutoPlay.textContent = data.autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (data.autoPlay ? ' on' : ''); } }); // backend poll runs independently
+    client.on('queue-changed', function(data) { if (data.sessionId !== selectedId) return; fetchQueue(); if (data.autoPlay !== undefined) { autoPlay = data.autoPlay; $btnAutoPlay.textContent = data.autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (data.autoPlay ? ' on' : ''); } if (data.queueMode !== undefined) applyQueueMode(data.queueMode); }); // backend poll runs independently
     client.on('queue-data', function(data) { if (data.sessionId !== selectedId) return; renderQueue(data.queue || [], data.autoPlay); if (data.autoPlay && queueMode) true; });
     client.on('queue-auto-ready', function(data) { if (data.sessionId !== selectedId) return; countdown = 2; fetchQueue(); if (countdownTimer) clearInterval(countdownTimer); countdownTimer = setInterval(function() { countdown--; if (countdown <= 0) { clearInterval(countdownTimer); countdownTimer = null; countdown = 0; client.sendNextFromQueue(selectedId); } else { fetchQueue(); } }, 1000); });
     // Cancel via pause (⏸) or mode switch (📋) — countdown shows on first queue item

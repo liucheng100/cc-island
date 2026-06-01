@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('ccIsland', {
   clearQueue: (sessionId) => ipcRenderer.invoke('clear-queue', sessionId),
   setAutoPlay: (sessionId, enabled) => ipcRenderer.invoke('set-auto-play', sessionId, enabled),
   getAutoPlay: (sessionId) => ipcRenderer.invoke('get-auto-play', sessionId),
+  getQueueMode: (sessionId) => ipcRenderer.invoke('get-queue-mode', sessionId),
+  setQueueMode: (sessionId, enabled) => ipcRenderer.invoke('set-queue-mode', sessionId, enabled),
   sendNextFromQueue: (sessionId) => ipcRenderer.invoke('send-next-from-queue', sessionId),
   reorderQueue: (sessionId, from, to) => ipcRenderer.invoke('reorder-queue', sessionId, from, to),
   onQueueUpdated: (callback) => {

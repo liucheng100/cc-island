@@ -176,10 +176,12 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
     if (!selectedId || !window.ccIsland) { setCmdQueue([]); setAutoPlay(false); return; }
     window.ccIsland.getQueue(selectedId).then(q => setCmdQueue(q || []));
     window.ccIsland.getAutoPlay(selectedId).then(ap => { const on = ap !== false; setAutoPlay(on); if (on) window.ccIsland.setAutoPlay(selectedId, true); });
+    window.ccIsland.getQueueMode(selectedId).then(v => setQueueMode(!!v));
     const unsub1 = window.ccIsland.onQueueUpdated((data) => {
       if (data.sessionId === selectedId) {
         setCmdQueue(data.queue || []);
         if (data.autoPlay !== undefined) setAutoPlay(data.autoPlay);
+        if (data.queueMode !== undefined) setQueueMode(data.queueMode);
       }
     });
     const unsub2 = window.ccIsland.onQueueAutoReady((data) => {
@@ -543,6 +545,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                   <button className="btn-queue-mode" onClick={() => {
                     const next = !queueMode;
                     setQueueMode(next);
+                    if (window.ccIsland) window.ccIsland.setQueueMode(selectedId, next);
                     setCountdown(0);
                     if (!next) { setAutoPlay(false); if (window.ccIsland) window.ccIsland.setAutoPlay(selectedId, false); }
                   }} title={queueMode ? '切换为正常模式' : '切换为队列模式'}>

@@ -142,6 +142,8 @@ function setupIPC() {
   ipcMain.handle('clear-queue', (_, sessionId) => { if (sessionMonitor) sessionMonitor.clearQueue(sessionId); });
   ipcMain.handle('set-auto-play', (_, sessionId, enabled) => { if (sessionMonitor) sessionMonitor.setAutoPlay(sessionId, enabled); });
   ipcMain.handle('get-auto-play', (_, sessionId) => sessionMonitor ? sessionMonitor.getAutoPlay(sessionId) : false);
+  ipcMain.handle('get-queue-mode', (_, sessionId) => sessionMonitor ? sessionMonitor.getQueueMode(sessionId) : false);
+  ipcMain.handle('set-queue-mode', (_, sessionId, enabled) => { if (sessionMonitor) sessionMonitor.setQueueMode(sessionId, enabled); });
   ipcMain.handle('send-next-from-queue', (_, sessionId) => sessionMonitor ? sessionMonitor.sendNextFromQueue(sessionId) : false);
   ipcMain.handle('cancel-auto-send', (_, sessionId) => { if (sessionMonitor) sessionMonitor.cancelAutoSend(sessionId); });
   ipcMain.handle('reorder-queue', (_, sessionId, from, to) => { if (sessionMonitor) sessionMonitor.reorderQueue(sessionId, from, to); });
@@ -238,6 +240,7 @@ function setupIPC() {
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
       localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+      localServer.getQueueModeForSession = (id) => sessionMonitor.getQueueMode(id);
         // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
@@ -252,6 +255,7 @@ function setupIPC() {
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
       localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+      localServer.getQueueModeForSession = (id) => sessionMonitor.getQueueMode(id);
         // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
@@ -267,6 +271,7 @@ function setupIPC() {
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
       localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+      localServer.getQueueModeForSession = (id) => sessionMonitor.getQueueMode(id);
         // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
@@ -312,6 +317,7 @@ app.whenReady().then(async () => {
   localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
       localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+      localServer.getQueueModeForSession = (id) => sessionMonitor.getQueueMode(id);
   wechatBridge = new WechatBridge(localServer);
   wechatBridge.init();
   createIslandWindow();
@@ -416,6 +422,9 @@ app.whenReady().then(async () => {
   });
   bus.on('set-auto-play', (sessionId, enabled) => {
     if (sessionMonitor) sessionMonitor.setAutoPlay(sessionId, enabled);
+  });
+  bus.on('set-queue-mode', (sessionId, enabled) => {
+    if (sessionMonitor) sessionMonitor.setQueueMode(sessionId, enabled);
   });
   bus.on('send-next-from-queue', (sessionId) => {
     if (sessionMonitor) sessionMonitor.sendNextFromQueue(sessionId);

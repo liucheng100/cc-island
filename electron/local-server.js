@@ -49,7 +49,7 @@ class LocalServer extends EventEmitter {
 
   onQueueUpdated(data) {
     if (this.io && data && data.sessionId) {
-      this.io.emit('queue-changed', { sessionId: data.sessionId, autoPlay: data.autoPlay });
+      this.io.emit('queue-changed', { sessionId: data.sessionId, autoPlay: data.autoPlay, queueMode: data.queueMode });
     }
   }
 
@@ -252,6 +252,10 @@ class LocalServer extends EventEmitter {
         }
       });
 
+      this.app.get('/api/queue-mode/:id', authGuard, (req, res) => {
+        res.json(this.getQueueModeForSession ? this.getQueueModeForSession(req.params.id) : false);
+      });
+
       // === Auth API (no guard) ===
       this.app.post('/api/auth', express.json(), (req, res) => {
         const { pin, deviceId, deviceName } = req.body || {};
@@ -428,6 +432,10 @@ class LocalServer extends EventEmitter {
         socket.on('set-auto-play', (data) => {
           if (!socketAuth(socket)) return;
           bus.emit('set-auto-play', data.sessionId, data.enabled);
+        });
+        socket.on('set-queue-mode', (data) => {
+          if (!socketAuth(socket)) return;
+          bus.emit('set-queue-mode', data.sessionId, data.enabled);
         });
         socket.on('send-next-from-queue', (sessionId) => {
           if (!socketAuth(socket)) return;

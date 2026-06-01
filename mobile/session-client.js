@@ -71,6 +71,7 @@ SessionClient.prototype = {
   getSessionList: function(cb) { this._httpGet('/api/sessions', cb); },
   getSessionDetail: function(id, cb) { this._httpGet('/api/sessions/' + encodeURIComponent(id), cb); },
   getQueue: function(id, cb) { this._httpGet('/api/queue/' + encodeURIComponent(id), cb); },
+  getQueueMode: function(id, cb) { this._httpGet('/api/queue-mode/' + encodeURIComponent(id), cb); },
 
   verifyPin: function(pin, deviceId, deviceName, cb) {
     var xhr = new XMLHttpRequest();
@@ -99,6 +100,7 @@ SessionClient.prototype = {
   clearQueue: function(id)        { this._emitSocket('clear-queue', id); },
   reorderQueue: function(id, from, to) { this._emitSocket('reorder-queue', { sessionId: id, from: from, to: to }); },
   setAutoPlay: function(id, enabled) { this._emitSocket('set-auto-play', { sessionId: id, enabled: enabled }); },
+  setQueueMode: function(id, enabled) { this._emitSocket('set-queue-mode', { sessionId: id, enabled: enabled }); },
   sendNextFromQueue: function(id) { this._emitSocket('send-next-from-queue', id); },
   requestQueue: function(id)      { this._emitSocket('get-queue', id); },
   latencyTest: function()         { this._emitSocket('latency-test'); }

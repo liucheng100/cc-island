@@ -27,6 +27,7 @@ class SessionMonitor extends EventEmitter {
     this._autoPlay = new Map(); // sessionKey → boolean
     this._autoPlayTimers = new Map(); // sessionKey → interval timer
     this._countdownPending = new Map(); // sessionKey → boolean, prevent duplicate queue-auto-ready
+    this._queueModes = new Map(); // sessionKey → boolean, per-session queue mode
     this._emptyScanStreak = 0; // count consecutive empty scans
     this._lastSessionsHash = ''; // track sessions state to skip redundant broadcasts
   }
@@ -34,6 +35,12 @@ class SessionMonitor extends EventEmitter {
   // === Command Queue ===
   getQueue(sessionId) { return this.commandQueues.get(sessionId) || []; }
   getAutoPlay(sessionId) { return this._autoPlay.has(sessionId) ? !!this._autoPlay.get(sessionId) : true; }
+  getQueueMode(sessionId) { return this._queueModes.has(sessionId) ? !!this._queueModes.get(sessionId) : false; }
+
+  setQueueMode(sessionId, enabled) {
+    this._queueModes.set(sessionId, enabled);
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId), queueMode: enabled });
+  }
 
   setAutoPlay(sessionId, enabled) {
     this._autoPlay.set(sessionId, enabled);
