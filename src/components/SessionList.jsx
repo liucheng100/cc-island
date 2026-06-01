@@ -361,19 +361,23 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
-          <div className="new-session-wrap" style={{position:'relative'}}>
-            <button className="btn-settings" onClick={(e) => {
-              e.stopPropagation();
-              const menu = e.currentTarget.nextElementSibling;
-              menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
-            }} title="新建 Claude 会话" onBlur={(e) => { setTimeout(() => { if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.style.display = 'none'; }, 200); }}>
+          <div className="new-session-wrap" style={{position:'relative'}} ref={(el) => {
+            if (el && !el._menuBound) {
+              el._menuBound = true;
+              const btn = el.querySelector('.btn-settings');
+              const menu = el.querySelector('.new-session-menu');
+              document.addEventListener('click', (e) => { if (!el.contains(e.target)) menu.style.display = 'none'; });
+              btn.addEventListener('click', (e) => { e.stopPropagation(); menu.style.display = menu.style.display === 'block' ? 'none' : 'block'; });
+            }
+          }}>
+            <button className="btn-settings" title="新建 Claude 会话">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 5v14M5 12h14" />
               </svg>
             </button>
-            <div className="new-session-menu" style={{display:'none',position:'absolute',top:'100%',right:0,zIndex:100,marginTop:4,minWidth:180,background:'var(--bg-card)',border:'1px solid var(--border-subtle)',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',overflow:'hidden'}}>
-              <button className="new-session-opt" style={{display:'block',width:'100%',padding:'8px 12px',border:'none',background:'none',color:'var(--text-primary)',fontSize:11,textAlign:'left',cursor:'pointer'}} onMouseDown={(e) => { e.preventDefault(); e.currentTarget.parentElement.style.display='none'; if (window.ccIsland) window.ccIsland.newClaudeSession().catch(() => {}); }}>普通模式</button>
-              <button className="new-session-opt" style={{display:'block',width:'100%',padding:'8px 12px',border:'none',background:'none',color:'var(--text-primary)',fontSize:11,textAlign:'left',cursor:'pointer',borderTop:'1px solid var(--border-subtle)'}} onMouseDown={(e) => { e.preventDefault(); e.currentTarget.parentElement.style.display='none'; if (window.ccIsland) window.ccIsland.newClaudeSession('', {dangerouslySkipPermissions:true}).catch(() => {}); }}>跳过权限 <span style={{display:'block',fontSize:9,color:'var(--text-muted)',marginTop:2}}>--dangerously-skip-permissions</span></button>
+            <div className="new-session-menu" style={{display:'none',position:'absolute',top:'100%',right:0,zIndex:100,marginTop:4,minWidth:200,background:'var(--bg-card)',border:'1px solid var(--border-subtle)',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',overflow:'hidden'}}>
+              <button className="new-session-opt" onMouseDown={(e) => { e.preventDefault(); e.currentTarget.parentElement.style.display='none'; if (window.ccIsland) window.ccIsland.newClaudeSession().catch(() => {}); }}>普通模式</button>
+              <button className="new-session-opt" onMouseDown={(e) => { e.preventDefault(); e.currentTarget.parentElement.style.display='none'; if (window.ccIsland) window.ccIsland.newClaudeSession('', {dangerouslySkipPermissions:true}).catch(() => {}); }}>跳过权限 <span style={{display:'block',fontSize:9,color:'var(--text-muted)',marginTop:1}}>-dangerously-skip-permissions</span></button>
             </div>
           </div>
           {onOpenSettings && (
@@ -865,6 +869,9 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         .btn-queue-mode { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 4px; border-radius: 4px; opacity: 0.5; transition: all 0.15s; }
         .btn-queue-mode:hover { opacity: 0.8; }
         .btn-queue-mode.active { color: var(--accent); opacity: 1; }
+        .new-session-opt { display: block; width: 100%; padding: 8px 12px; border: none; background: none; color: var(--text-primary); font-size: 11px; text-align: left; cursor: pointer; min-height: 36px; display: flex; flex-direction: column; justify-content: center; }
+        .new-session-opt:hover { background: rgba(255,255,255,0.04); }
+        .new-session-opt + .new-session-opt { border-top: 1px solid var(--border-subtle); }
       `}</style>
     </div>
   );

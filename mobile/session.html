@@ -224,9 +224,10 @@
     }
     .new-session-menu.show { display: block; }
     .new-session-opt {
-      display: block; width: 100%; padding: 10px 14px; border: none;
+      display: flex; flex-direction: column; justify-content: center;
+      width: 100%; padding: 10px 14px; border: none;
       background: none; color: var(--text); font-size: 13px; text-align: left;
-      cursor: pointer; transition: background 0.15s;
+      cursor: pointer; transition: background 0.15s; min-height: 44px;
     }
     .new-session-opt:active { background: var(--accent-dim); }
     .new-session-opt + .new-session-opt { border-top: 1px solid var(--border); }
@@ -911,6 +912,7 @@
     });
     document.addEventListener('click', function() { $newSessionMenu.classList.remove('show'); });
     $newSessionMenu.addEventListener('click', function(e) {
+      e.stopPropagation();
       var btn = e.target.closest('.new-session-opt');
       if (!btn) return;
       $newSessionMenu.classList.remove('show');
