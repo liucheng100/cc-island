@@ -20,7 +20,7 @@
       -webkit-tap-highlight-color: transparent;
       min-width: 0;
     }
-    .sidebar, .detail-hdr, .input-bar, .tabs-wrap { user-select: none; }
+    .sidebar, .detail-hdr, .input-bar { user-select: none; }
     .sidebar { position: relative; }
     /* Header */
     .header {
@@ -53,14 +53,11 @@
     }
     /* Tabs row with search */
     .tabs-row {
-      display: flex; align-items: center; gap: 4px;
+      display: flex; align-items: center; gap: 5px;
       padding: 8px 8px 6px 12px; flex-shrink: 0;
-    }
-    .tabs-wrap {
-      display: flex; gap: 5px; flex: 1; min-width: 0;
       overflow-x: auto; scrollbar-width: none;
     }
-    .tabs-wrap::-webkit-scrollbar { display: none; }
+    .tabs-row::-webkit-scrollbar { display: none; }
     .search-btn {
       background: none; border: none; color: var(--text2); cursor: pointer;
       padding: 5px; border-radius: 6px; display: flex; flex-shrink: 0;
@@ -78,7 +75,6 @@
       font-size: 12px; color: var(--text); outline: none;
     }
     .search-dropdown input::placeholder { color: var(--text2); }
-    .tabs-wrap::-webkit-scrollbar { display: none; }
     .tab {
       display: flex; align-items: center; gap: 5px;
       padding: 6px 10px; border-radius: 14px; flex-shrink: 0;
@@ -189,28 +185,30 @@
       transition: all 0.15s; flex-shrink: 0;
     }
     .btn-new-session:active { background: rgba(99,102,241,0.2); color: var(--accent); }
-    /* Command Queue */
-    .cmd-queue { flex-shrink: 0; background: var(--bg2); border-top: 1px solid var(--border); padding: 6px 12px; }
-    .cmd-queue-hdr { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--text2); margin-bottom: 4px; }
-    .cmd-queue-clear { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 9px; }
-    .cmd-queue-clear:hover { color: var(--danger); }
-    .cmd-queue-list { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; }
-    .cmd-queue-item {
-      display: flex; align-items: center; gap: 3px;
-      padding: 2px 8px; background: rgba(99,102,241,0.08); border-radius: 10px;
-      font-size: 10px; color: var(--text);
-    }
-    .cmd-queue-item span { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cmd-queue-item button { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 11px; padding: 0 2px; }
-    .cmd-queue-add { display: flex; gap: 4px; }
-    .cmd-queue-add input {
-      flex: 1; min-width: 0; padding: 4px 8px; border-radius: 10px;
-      background: var(--bg3); border: 1px solid var(--border); font-size: 11px; color: var(--text); outline: none;
-    }
-    .cmd-queue-add button {
-      background: var(--accent); border: none; border-radius: 10px;
-      color: #fff; font-size: 12px; padding: 4px 10px; cursor: pointer;
-    }
+    /* Queue panel */
+    .queue-panel { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--bg2); overflow: hidden; transition: max-height 0.25s ease, opacity 0.25s ease; max-height: 300px; opacity: 1; }
+    .queue-panel.collapsed { max-height: 36px; }
+    .queue-panel-hdr { display: flex; align-items: center; justify-content: space-between; padding: 4px 14px; font-size: 10px; color: var(--text2); user-select: none; }
+    .queue-panel-acts { display: flex; align-items: center; gap: 6px; }
+    .btn-autoplay { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 13px; padding: 2px 4px; border-radius: 3px; opacity: 0.5; }
+    .btn-autoplay.on { color: var(--success); opacity: 1; }
+    .queue-panel-list { padding: 2px 12px 6px; display: flex; flex-direction: column; gap: 2px; max-height: 120px; overflow-y: auto; }
+    .queue-cmd { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 4px; transition: all 0.15s; user-select: none; }
+    .queue-cmd:active { background: rgba(255,255,255,0.03); }
+    .queue-cmd.dragging { opacity: 0.3; }
+    .queue-cmd.drag-over { background: rgba(99,102,241,0.08); }
+    .queue-cmd-idx { font-size: 10px; color: var(--text2); width: 18px; text-align: center; flex-shrink: 0; }
+    .queue-cmd-text { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-cmd-send { background: none; border: none; color: var(--success); cursor: pointer; font-size: 11px; padding: 2px; border-radius: 3px; opacity: 0.4; }
+    .queue-cmd-send:active { opacity: 1; }
+    .queue-cmd-del { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 13px; padding: 2px; border-radius: 3px; opacity: 0.3; }
+    .queue-cmd-del:active { opacity: 1; color: var(--danger); }
+    .queue-countdown { display: flex; align-items: center; gap: 8px; padding: 5px 14px; background: rgba(245,158,11,0.06); border-top: 1px solid rgba(245,158,11,0.15); font-size: 10px; color: var(--warning); }
+    .queue-countdown button { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 9px; opacity: 0.6; }
+    .queue-countdown button:active { opacity: 1; }
+    .btn-queue-mode { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 15px; padding: 4px; border-radius: 4px; opacity: 0.5; flex-shrink: 0; }
+    .btn-queue-mode.active { color: var(--accent); opacity: 1; }
+    .queue-collapse-btn { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 10px; padding: 2px 4px; opacity: 0.4; }
     /* === PIN overlay === */
     .pin-overlay {
       position: fixed; inset: 0; background: var(--bg);
@@ -241,17 +239,25 @@
     /* Desktop */
     @media (min-width: 640px) {
       #appUi { flex-direction: row; }
+      .tabs-row { flex: 1; min-height: 0; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+      .search-btn { display: none; }
+      .search-dropdown { display: flex; position: static; padding: 8px 10px; background: transparent; border-bottom: 1px solid var(--border); }
+      .search-dropdown input { background: var(--bg3); border: 1px solid var(--border); }
       .sidebar {
         width: 260px; max-width: 40vw; flex-shrink: 0;
         display: flex; flex-direction: column; overflow: hidden;
         border-right: 1px solid var(--border); background: var(--bg2);
       }
-      .tabs-wrap {
-        flex-direction: column; overflow-y: auto; overflow-x: hidden;
-        flex: 1; min-height: 0; padding: 0;
+      .tabs-row { flex: 1; min-height: 0; flex-direction: column; padding: 0 10px; overflow: hidden; }
+      .tabs-row { flex-direction: column; overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; padding: 0 10px; }
+      .tab {
+        border-radius: 6px; border: 1px solid transparent; max-width: none;
+        padding: 6px 10px; font-size: 12px; width: 100%; box-sizing: border-box;
+        transition: all 0.15s;
       }
-      .tab { border-radius: 0; border: none; border-left: 2px solid transparent; padding: 9px 12px; font-size: 12px; max-width: none; }
-      .tab.sel { background: rgba(99,102,241,0.08); border-left-color: var(--accent); }
+      .tab:hover { background: rgba(255,255,255,0.03); }
+      .tab.sel { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.2); }
+      .tab.sel .tab-name { color: var(--accent); font-weight: 600; }
     }
   </style>
 </head>
@@ -279,17 +285,15 @@
         </button>
         <span class="pill" id="wsBadge">连接中</span>
         <span class="pill" id="cntBadge">0</span>
-        <button class="btn-new-session" id="btnNetTest" title="网络延迟测试" style="font-size:11px;padding:2px 6px;">📶</button>
       </div>
-    </div>
-    <div class="tabs-row">
-      <div class="tabs-wrap" id="tabList"></div>
-      <button class="search-btn" id="searchBtn" title="搜索">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-      </button>
     </div>
     <div class="search-dropdown" id="searchDropdown">
       <input type="text" id="searchInput" placeholder="搜索会话..." />
+    </div>
+    <div class="tabs-row" id="tabList">
+      <button class="search-btn" id="searchBtn" title="搜索">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      </button>
     </div>
   </div>
 
@@ -304,20 +308,21 @@
       <button class="btn-icon" id="btnFocus" style="display:none" title="弹出 CMD"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
     </div>
     <div class="msg-list" id="msgList"></div>
+    <div class="queue-panel" id="queuePanel" style="display:none">
+      <div class="queue-panel-hdr" id="queuePanelHdr">
+        <span id="queueHdrLabel" style="flex:1">指令队列 (<span id="queueCount">0</span>)</span>
+        <div class="queue-panel-acts">
+          <button id="queueClear" title="清空队列" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:10px;opacity:0.4;padding:2px 4px;">清空</button>
+          <button class="btn-autoplay" id="btnAutoPlay" title="自动执行">▶</button>
+          <button class="queue-collapse-btn" id="queueCollapseBtn" title="收起">▲</button>
+        </div>
+      </div>
+      <div class="queue-panel-list" id="queueList"></div>
+    </div>
     <div class="input-bar" id="inputBar" style="display:none">
       <input type="text" id="msgInput" placeholder="输入指令..." />
+      <button class="btn-queue-mode" id="btnQueueMode" title="切换队列模式">📋</button>
       <button class="btn-send" id="sendBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
-    </div>
-    <div class="cmd-queue" id="cmdQueue" style="display:none">
-      <div class="cmd-queue-hdr" id="cmdQueueHdr">
-        <span>指令队列 (<span id="cmdQueueCount">0</span>)</span>
-        <button class="cmd-queue-clear" id="cmdQueueClear">清空</button>
-      </div>
-      <div class="cmd-queue-list" id="cmdQueueList"></div>
-      <div class="cmd-queue-add">
-        <input type="text" id="cmdQueueInput" placeholder="添加指令..." />
-        <button id="cmdQueueAddBtn">+</button>
-      </div>
     </div>
   </div>
   </div>
@@ -371,7 +376,7 @@
 
     // Load cached PIN
     var cachedPin = '';
-    try { cachedPin = localStorage.getItem('cc-island-pin') || ''; } catch(e) {}
+    try { cachedPin = sessionStorage.getItem('cc-island-pin') || ''; } catch(e) {}
     if (urlPin) {
       $pinInput.value = urlPin;
     } else if (cachedPin) {
@@ -382,11 +387,15 @@
       $pinErr.textContent = '';
       $pinPending.style.display = 'none';
 
-      client.verifyPin(pin, deviceId, navigator.userAgent.substring(0, 50), function(r) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/auth');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        try { var r = JSON.parse(xhr.responseText); } catch(e) { r = null; }
         if (!r) { $pinErr.textContent = '请求失败'; return; }
         if (r.ok) {
           accessPin = pin;
-          try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+          try { sessionStorage.setItem('cc-island-pin', pin); } catch(e) {}
           $pinOverlay.style.display = 'none';
           $appUi.style.display = 'flex';
           try { history.replaceState({}, '', location.pathname); } catch(e) {}
@@ -394,23 +403,30 @@
         } else if (r.pending) {
           $pinPending.style.display = 'block';
           var pollTimer = setInterval(function() {
-            client.verifyPin(pin, deviceId, navigator.userAgent.substring(0, 50), function(pr) {
+            var px = new XMLHttpRequest();
+            px.open('POST', '/api/auth');
+            px.setRequestHeader('Content-Type', 'application/json');
+            px.onload = function() {
+              try { var pr = JSON.parse(px.responseText); } catch(e) { return; }
               if (pr && pr.ok) {
                 clearInterval(pollTimer);
                 accessPin = pin;
-                try { localStorage.setItem('cc-island-pin', pin); } catch(e) {}
+                try { sessionStorage.setItem('cc-island-pin', pin); } catch(e) {}
                 $pinOverlay.style.display = 'none';
                 $appUi.style.display = 'flex';
                 try { history.replaceState({}, '', location.pathname); } catch(e) {}
                 initApp();
               }
-            });
+            };
+            px.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
           }, 3000);
         } else {
-          if (r.reason === 'pin') { try { localStorage.removeItem('cc-island-pin'); } catch(e) {} }
+          if (r.reason === 'pin') { try { sessionStorage.removeItem('cc-island-pin'); } catch(e) {} }
           $pinErr.textContent = r.reason === 'pin' ? '密码错误' : r.reason === 'device_rejected' ? '设备未获授权' : '验证失败';
         }
-      });
+      };
+      xhr.onerror = function() { $pinErr.textContent = '无法连接到服务器'; };
+      xhr.send(JSON.stringify({ pin: pin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) }));
     }
 
     $pinBtn.addEventListener('click', function() {
@@ -476,12 +492,14 @@
     var $btnBack = document.getElementById('btnBack');
     var $btnFocus = document.getElementById('btnFocus');
     var $btnNewSession = document.getElementById('btnNewSession');
-    var $cmdQueue = document.getElementById('cmdQueue');
-    var $cmdQueueCount = document.getElementById('cmdQueueCount');
-    var $cmdQueueList = document.getElementById('cmdQueueList');
-    var $cmdQueueInput = document.getElementById('cmdQueueInput');
-    var $cmdQueueAddBtn = document.getElementById('cmdQueueAddBtn');
-    var $cmdQueueClear = document.getElementById('cmdQueueClear');
+    var $btnQueueMode = document.getElementById('btnQueueMode');
+    var $queuePanel = document.getElementById('queuePanel');
+    var $queueCount = document.getElementById('queueCount');
+    var $queueList = document.getElementById('queueList');
+    var $queueCollapseBtn = document.getElementById('queueCollapseBtn');
+    var $btnAutoPlay = document.getElementById('btnAutoPlay');
+    var $queueClear = document.getElementById('queueClear');
+    // Countdown: integrated into first queue item via countdown variable + renderQueue
 
     var allSessions = [];
     var selectedId = null;
@@ -492,9 +510,31 @@
     var msgIdSeq = 0;
     var pendingMsgs = {};
     var lastStatus = '';
-    var msgCache = {}; // sessionId → { messages, count, hash }
+    var lastRenderedSeq = -1; // highest seq rendered, for gap detection
+    var msgCache = {}; // sessionId → { messages, count, status }
+    // Load cached messages from sessionStorage
+    try {
+      var keys = Object.keys(sessionStorage);
+      for (var k = 0; k < keys.length; k++) {
+        if (keys[k].indexOf('cc-msg-') === 0) {
+          try {
+            var sid = keys[k].replace('cc-msg-', '');
+            var data = JSON.parse(sessionStorage.getItem(keys[k]));
+            if (data && data.messages) msgCache[sid] = data;
+          } catch(e) {}
+        }
+      }
+    } catch(e) {}
 
-    client.on('connect', function() {
+    function saveMsgCache(id, data) {
+      // Only cache last 50 messages per session
+      var msgs = (data.messages || []).slice(-200);
+      var slim = { messages: msgs, count: data.count, status: data.status };
+      msgCache[id] = slim;
+      try { sessionStorage.setItem('cc-msg-' + id, JSON.stringify(slim)); } catch(e) {}
+    }
+
+    function onConnected() {
       $wsBadge.textContent = '已连接';
       $wsBadge.className = 'pill live';
       loadSessionList();
@@ -502,7 +542,8 @@
         client.joinSession(selectedId);
         loadSessionDetail(selectedId);
       }
-    });
+    }
+    client.on('connect', onConnected);
 
     client.on('disconnect', function() {
       $wsBadge.textContent = '断开';
@@ -522,7 +563,7 @@
 
     client.on('auth-error', function(data) {
       accessPin = '';
-      try { localStorage.removeItem('cc-island-pin'); } catch(e) {}
+      try { sessionStorage.removeItem('cc-island-pin'); } catch(e) {}
       $appUi.style.display = 'none';
       $pinOverlay.style.display = 'flex';
       $pinErr.textContent = data.reason === 'pin' ? '密码已变更，请重新输入' : '设备权限已被撤销';
@@ -554,21 +595,33 @@
     client.on('session-messages', function(data) {
       if (!data || data.sessionId !== selectedId) return;
       if (data.delta && data.delta.length > 0) {
-        var consumed = confirmPending(data.delta);
-        data.delta.forEach(function(m) {
-          if (m.role === 'user' && consumed.has(m.content)) return;
-          appendMsg(m);
-        });
-        messageCount = data.messages ? data.messages.length : (messageCount + data.delta.length);
-        // Update cache
-        if (data.messages) {
-          msgCache[data.sessionId] = { messages: data.messages, count: data.messages.length, status: data.status };
+        // Sort delta by seq
+        var delta = data.delta.slice().sort(function(a, b) { return (a.seq || 0) - (b.seq || 0); });
+        // Check for gap: first delta seq should be lastRenderedSeq + 1
+        var firstSeq = delta[0].seq;
+        if (firstSeq !== undefined && lastRenderedSeq >= 0 && firstSeq > lastRenderedSeq + 1) {
+          // Gap detected — HTTP fetch to fill missing messages, then apply delta
+          loadSessionDetail(selectedId);
+          return;
         }
-        var s = allSessions.find(function(s){return s.id===selectedId});
-        var st = data.status || (s ? s.status : null);
-        if (s) updateDetailHeader(s);
-        addThinkDot(st ? { status: st } : s);
-        if (followBottom) scrollToBottom();
+        // Reset lastRenderedSeq if we're starting fresh (e.g. lastRenderedSeq is -1 or seq restarted)
+        if (firstSeq !== undefined && (lastRenderedSeq < 0 || firstSeq <= lastRenderedSeq + 1)) {
+          var consumed = confirmPending(delta);
+          delta.forEach(function(m) {
+            if (m.role === 'user' && consumed.has(m.content)) return;
+            appendMsg(m);
+            if (m.seq !== undefined) lastRenderedSeq = Math.max(lastRenderedSeq, m.seq);
+          });
+          messageCount = data.messages ? data.messages.length : (messageCount + delta.length);
+          if (data.messages) {
+            saveMsgCache(data.sessionId, { messages: data.messages, count: data.messages.length, status: data.status });
+          }
+          var s = allSessions.find(function(s){return s.id===selectedId});
+          var st = data.status || (s ? s.status : null);
+          if (s) updateDetailHeader(s);
+          addThinkDot(st ? { status: st } : s);
+          if (followBottom) scrollToBottom();
+        }
       }
     });
 
@@ -593,15 +646,21 @@
       if (cached && cached.count === newCount) {
         updateDetailHeader(detail);
         addThinkDot(detail);
+        if (followBottom) scrollToBottom();
         return;
       }
       // Update cache and rebuild
-      msgCache[id] = { messages: detail.messages || [], count: newCount, status: detail.status };
+      saveMsgCache(id, { messages: detail.messages || [], count: newCount, status: detail.status });
       messageCount = newCount;
       updateDetailHeader(detail);
       $msgList.innerHTML = '';
       if (detail.messages && detail.messages.length > 0) {
         detail.messages.forEach(function(m) { appendMsg(m); });
+        // Update lastRenderedSeq to prevent gap detection loop
+        var lastMsg = detail.messages[detail.messages.length - 1];
+        // Note: HTTP-fetched messages don't have seq, so leave lastRenderedSeq
+        // for delta-based updates to handle. Reset to -1 so next delta starts fresh.
+        lastRenderedSeq = -1;
       } else {
         $msgList.innerHTML = '<div class="msg sys">暂无对话记录</div>';
       }
@@ -654,6 +713,8 @@
       if (selectedId) { inputCache[selectedId] = $msgInput.value; client.leaveSession(selectedId); }
       selectedId = id;
       lastStatus = '';
+      lastRenderedSeq = -1;
+      followBottom = true;
       if (!id) { hideDetail(); renderTabs(); return; }
       client.joinSession(id);
       showDetail();
@@ -672,23 +733,34 @@
       loadSessionDetail(id);
     }
 
-    function showDetail() { $emptyState.style.display = 'none'; $detailHdr.style.display = 'flex'; $msgList.style.display = 'flex'; $inputBar.style.display = 'flex'; $cmdQueue.style.display = 'block'; setTimeout(function(){ $msgInput.focus(); }, 100); }
-    function hideDetail() { $emptyState.style.display = 'flex'; $detailHdr.style.display = 'none'; $msgList.style.display = 'none'; $inputBar.style.display = 'none'; $cmdQueue.style.display = 'none'; $msgList.innerHTML = ''; lastStatus = ''; }
+    function showDetail() { $emptyState.style.display = 'none'; $detailHdr.style.display = 'flex'; $msgList.style.display = 'flex'; $inputBar.style.display = 'flex'; if (queueMode) $queuePanel.style.display = 'block'; setTimeout(function(){ $msgInput.focus(); }, 100); }
+    function hideDetail() { $emptyState.style.display = 'flex'; $detailHdr.style.display = 'none'; $msgList.style.display = 'none'; $inputBar.style.display = 'none'; $queuePanel.style.display = 'none'; $msgList.innerHTML = ''; lastStatus = ''; }
 
     function updateDetailHeader(s) {
       $detailName.textContent = s.name || 'Claude';
       var dur = s.workingDuration ? formatDuration(s.workingDuration) : '';
       var st = STATUS_MAP[s.status] || s.status || '';
       $detailMeta.textContent = [dur, st].filter(Boolean).join(' · ');
-      $btnFocus.style.display = (s.status === 'working' || s.status === 'thinking' || s.status === 'answering') ? 'flex' : 'none';
+      var active = s.status === 'working' || s.status === 'thinking' || s.status === 'answering';
+      $btnFocus.style.display = active ? 'flex' : 'none';
     }
 
-    function sendMessage() {
-      if (isSending || !selectedId) return;
+    var queueMode = false;
+    var autoPlay = true;
+    var countdown = 0;
+    var countdownTimer = null;
+    // Backend handles all queue execution — frontend only displays countdown
+
+    function sendOrEnqueue() {
       var text = $msgInput.value.trim();
-      if (!text) return;
-      isSending = true;
+      if (!text || !selectedId) return;
       $msgInput.value = '';
+      if (queueMode) {
+        client.addToQueue(selectedId, text);
+        $msgInput.focus();
+        return;
+      }
+      isSending = true;
       $sendBtn.disabled = true;
       var clientId = 'msg-' + (++msgIdSeq);
       var el = appendPendingMsg(text, clientId);
@@ -701,6 +773,8 @@
       client.sendMessage(selectedId, text);
       setTimeout(function() { isSending = false; $sendBtn.disabled = false; $msgInput.focus(); }, 600);
     }
+
+    function sendMessage() { sendOrEnqueue(); }
 
     function appendPendingMsg(text, clientId) {
       var div = document.createElement('div');
@@ -747,10 +821,23 @@
       if (show) setTimeout(function() { $searchInput.focus(); }, 100);
       else { $searchInput.value = ''; renderTabs(); }
     });
+    // Queue mode toggle
+    $btnQueueMode.addEventListener('click', function() {
+      queueMode = !queueMode;
+      $btnQueueMode.className = 'btn-queue-mode' + (queueMode ? ' active' : '');
+      $sendBtn.style.background = queueMode ? 'rgba(99,102,241,0.15)' : '';
+      $sendBtn.style.color = queueMode ? 'var(--accent)' : '';
+      $sendBtn.innerHTML = queueMode ? '+Q' : '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z\"/></svg>';
+      $queuePanel.style.display = queueMode ? 'block' : 'none';
+      $msgInput.placeholder = queueMode ? '输入指令加入队列...' : '输入指令...';
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      countdown = 0; fetchQueue();
+      if (!queueMode) { autoPlay = false; $btnAutoPlay.className = 'btn-autoplay'; $btnAutoPlay.textContent = '▶'; client.setAutoPlay(selectedId, false); }
+    });
     // Events
     $searchInput.addEventListener('input', renderTabs);
-    $sendBtn.addEventListener('click', sendMessage);
-    $msgInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); sendMessage(); } });
+    $sendBtn.addEventListener('click', sendOrEnqueue);
+    $msgInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); sendOrEnqueue(); } });
     $btnBack.addEventListener('click', function() {
       if (selectedId) client.leaveSession(selectedId);
       selectedId = null; hideDetail(); renderTabs();
@@ -760,106 +847,48 @@
       client.newSession(selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '');
     });
 
-    // === Network latency test (temporary tool) ===
-    var $btnNetTest = document.getElementById('btnNetTest');
-    var $netPanel = document.createElement('div');
-    $netPanel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;z-index:2000;display:none;min-width:200px;text-align:center;';
-    $netPanel.innerHTML = '<h3 style="margin-bottom:12px;font-size:14px;">网络延迟测试</h3>' +
-      '<div id="netHttpResult" style="margin:8px 0;font-size:13px;">HTTP: --</div>' +
-      '<div id="netWsResult" style="margin:8px 0;font-size:13px;">WebSocket: --</div>' +
-      '<button id="netTestBtn" style="margin:8px 4px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;">测试</button>' +
-      '<button id="netCloseBtn" style="margin:8px 4px;padding:6px 14px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;">关闭</button>';
-    document.body.appendChild($netPanel);
-
-    $btnNetTest.addEventListener('click', function() {
-      $netPanel.style.display = 'block';
-      document.getElementById('netHttpResult').textContent = 'HTTP: --';
-      document.getElementById('netWsResult').textContent = 'WebSocket: --';
-    });
-    document.getElementById('netCloseBtn').addEventListener('click', function() { $netPanel.style.display = 'none'; });
-    document.getElementById('netTestBtn').addEventListener('click', function() {
-      // HTTP test
-      var httpStart = Date.now();
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/health');
-      xhr.onload = function() {
-        var httpMs = Date.now() - httpStart;
-        document.getElementById('netHttpResult').textContent = 'HTTP: ' + httpMs + 'ms';
-      };
-      xhr.onerror = function() { document.getElementById('netHttpResult').textContent = 'HTTP: 失败'; };
-      xhr.send();
-
-      // WebSocket test — new isolated connection, full lifecycle
-      document.getElementById('netWsResult').textContent = 'WebSocket: 连接中...';
-      var wsStart = Date.now();
-      var testSocket = io({
-        auth: { pin: accessPin, deviceId: deviceId, deviceName: navigator.userAgent.substring(0, 50) },
-        timeout: 30000
-      });
-      testSocket.on('connect', function() {
-        var connectMs = Date.now() - wsStart;
-        testSocket.emit('latency-test');
-        testSocket.on('latency-pong', function() {
-          var totalMs = Date.now() - wsStart;
-          document.getElementById('netWsResult').textContent = 'WebSocket: ' + totalMs + 'ms (连接' + connectMs + 'ms + 往返)';
-          testSocket.close();
-        });
-      });
-      testSocket.on('connect_error', function() {
-        document.getElementById('netWsResult').textContent = 'WebSocket: 连接失败';
-        testSocket.close();
-      });
-    });
-
-    // === Command Queue ===
-    var renderQueue = function(q) {
-      $cmdQueueCount.textContent = q.length;
-      $cmdQueueList.innerHTML = '';
+    // === Command Queue (new design) ===
+    var renderQueue = function(q, ap) {
+      $queueCount.textContent = q.length;
+      $queueList.innerHTML = '';
+      if (q.length === 0 && !queueMode) { $queuePanel.style.display = 'none'; }
+      else if (queueMode) { $queuePanel.style.display = 'block'; }
+      if (ap !== undefined) {
+        autoPlay = ap;
+        $btnAutoPlay.textContent = ap ? '⏸' : '▶';
+        $btnAutoPlay.className = 'btn-autoplay' + (ap ? ' on' : '');
+      }
       q.forEach(function(cmd, i) {
         var el = document.createElement('div');
-        el.className = 'cmd-queue-item';
-        el.innerHTML = '<span>' + escapeHtml(cmd) + '</span><button data-idx="' + i + '">×</button>';
-        el.querySelector('button').addEventListener('click', function() {
-          client.removeFromQueue(selectedId, i);
-        });
-        $cmdQueueList.appendChild(el);
+        el.className = 'queue-cmd';
+        el.setAttribute('draggable', 'true');
+        var isCountdown = (i === 0 && countdown > 0);
+        el.innerHTML = '<span class="queue-cmd-idx' + (isCountdown ? ' countdown' : '') + '" title="' + (i === 0 ? '下一条执行' : '第' + (i + 1) + '条') + '">' + (isCountdown ? countdown + 's' : i === 0 ? '▶' : i + 1) + '</span>' +
+          '<span class="queue-cmd-text">' + escapeHtml(cmd) + '</span>' +
+          '<button class="queue-cmd-send">▶</button><button class="queue-cmd-del">×</button>';
+        el.querySelector('.queue-cmd-send').addEventListener('click', function() { client.sendMessage(selectedId, cmd); client.removeFromQueue(selectedId, i); });
+        el.querySelector('.queue-cmd-del').addEventListener('click', function() { client.removeFromQueue(selectedId, i); });
+        el.addEventListener('dragstart', function(e) { el.classList.add('dragging'); e.dataTransfer.setData('text/plain', String(i)); });
+        el.addEventListener('dragend', function() { el.classList.remove('dragging'); });
+        el.addEventListener('dragover', function(e) { e.preventDefault(); el.classList.add('drag-over'); });
+        el.addEventListener('dragleave', function() { el.classList.remove('drag-over'); });
+        el.addEventListener('drop', function(e) { e.preventDefault(); el.classList.remove('drag-over'); var from = parseInt(e.dataTransfer.getData('text/plain')); if (!isNaN(from) && from !== i) client.reorderQueue(selectedId, from, i); });
+        $queueList.appendChild(el);
       });
     };
-
-    function fetchQueue() {
-      if (!selectedId) return;
-      client.getQueue(selectedId, function(r) {
-        if (r && r.queue) renderQueue(r.queue);
-      });
-    }
-    client.on('queue-changed', function(data) {
-      if (data.sessionId !== selectedId) return;
-      fetchQueue();
+    function fetchQueue() { if (!selectedId) return; client.getQueue(selectedId, function(r) { if (r) { renderQueue(r.queue || [], r.autoPlay); if (r.autoPlay !== undefined) { autoPlay = r.autoPlay; $btnAutoPlay.textContent = autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (autoPlay ? ' on' : ''); if (autoPlay && queueMode) { true; client.setAutoPlay(selectedId, true); } else { ; } } else { ; } } }); }
+    client.on('queue-changed', function(data) { if (data.sessionId !== selectedId) return; fetchQueue(); if (data.autoPlay !== undefined) { autoPlay = data.autoPlay; $btnAutoPlay.textContent = data.autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (data.autoPlay ? ' on' : ''); } }); // backend poll runs independently
+    client.on('queue-data', function(data) { if (data.sessionId !== selectedId) return; renderQueue(data.queue || [], data.autoPlay); if (data.autoPlay && queueMode) true; });
+    client.on('queue-auto-ready', function(data) { if (data.sessionId !== selectedId) return; countdown = 2; fetchQueue(); if (countdownTimer) clearInterval(countdownTimer); countdownTimer = setInterval(function() { countdown--; if (countdown <= 0) { clearInterval(countdownTimer); countdownTimer = null; countdown = 0; client.sendNextFromQueue(selectedId); } else { fetchQueue(); } }, 1000); });
+    // Cancel via pause (⏸) or mode switch (📋) — countdown shows on first queue item
+    $btnAutoPlay.addEventListener('click', function() { autoPlay = !autoPlay; $btnAutoPlay.textContent = autoPlay ? '⏸' : '▶'; $btnAutoPlay.className = 'btn-autoplay' + (autoPlay ? ' on' : ''); client.setAutoPlay(selectedId, autoPlay); if (autoPlay) true; else ; if (!autoPlay) { if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; } countdown = 0; fetchQueue(); } });
+    $queueClear.addEventListener('click', function() { if (selectedId) client.clearQueue(selectedId); });
+    $queueCollapseBtn.addEventListener('click', function() {
+      var panel = document.getElementById('queuePanel');
+      var collapsed = panel.classList.toggle('collapsed');
+      document.getElementById('queueList').style.display = collapsed ? 'none' : '';
+      $queueCollapseBtn.textContent = collapsed ? '▼' : '▲';
     });
-    client.on('queue-data', function(data) {
-      if (data.sessionId !== selectedId) return;
-      renderQueue(data.queue || []);
-    });
-
-    $cmdQueueAddBtn.addEventListener('click', function() {
-      var cmd = $cmdQueueInput.value.trim();
-      if (!cmd || !selectedId) return;
-      client.addToQueue(selectedId, cmd);
-      $cmdQueueInput.value = '';
-    });
-    $cmdQueueInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') $cmdQueueAddBtn.click();
-    });
-    $cmdQueueClear.addEventListener('click', function() {
-      if (selectedId) client.clearQueue(selectedId);
-    });
-
-    client.on('queue-data', function(data) {
-      if (data.sessionId !== selectedId) return;
-      renderQueue(data.queue || []);
-    });
-
-    // Load queue on tab switch via HTTP
     var origSelectSession = selectSession;
     selectSession = function(id) {
       origSelectSession(id);
@@ -876,7 +905,8 @@
       if (followBottom) scrollToBottom();
     });
 
-    // Initial load
+    // Initial load — if socket already connected, kick off immediately
+    if (client.socket && client.socket.connected) onConnected();
     loadSessionList();
     if (urlSid) { selectedId = urlSid; showDetail(); loadSessionDetail(urlSid); }
     } // end setupSocket
