@@ -215,14 +215,15 @@
       transition: all 0.2s; flex-shrink: 0;
     }
     .btn-new-session:active { background: var(--accent-dim); color: var(--accent); border-color: rgba(124,127,255,0.3); }
-    .new-session-wrap { position: relative; }
     .new-session-menu {
-      display: none; position: absolute; top: 100%; right: 0; z-index: 100;
-      margin-top: 6px; min-width: 180px;
-      background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+      display: none; position: fixed; z-index: 1000;
+      min-width: 200px;
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6); overflow: hidden;
     }
     .new-session-menu.show { display: block; }
+    .new-session-overlay { display: none; position: fixed; inset: 0; z-index: 999; }
+    .new-session-overlay.show { display: block; }
     .new-session-opt {
       display: flex; flex-direction: column; justify-content: center;
       width: 100%; padding: 10px 14px; border: none;
@@ -330,15 +331,9 @@
     <div class="header">
       <div class="header-l"><div class="logo">🏝</div><h1>CC Island</h1></div>
       <div class="header-r">
-        <div class="new-session-wrap" id="newSessionWrap">
-          <button class="btn-new-session" id="btnNewSession" title="新建 Claude CMD">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
-          <div class="new-session-menu" id="newSessionMenu">
-            <button class="new-session-opt" data-mode="normal">普通模式</button>
-            <button class="new-session-opt" data-mode="skip">跳过权限 <span class="opt-tag">--dangerously-skip-permissions</span></button>
-          </div>
-        </div>
+        <button class="btn-new-session" id="btnNewSession" title="新建 Claude CMD">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
         <span class="pill" id="wsBadge">连接中</span>
         <span class="pill" id="cntBadge">0</span>
       </div>
@@ -904,18 +899,30 @@
       selectedId = null; hideDetail(); renderTabs();
     });
     $btnFocus.addEventListener('click', function() { if (selectedId) client.focusSession(selectedId); });
-    // New session — show mode menu
+    // New session — show mode menu (fixed position, body level)
     var $newSessionMenu = document.getElementById('newSessionMenu');
+    var $newSessionOverlay = document.getElementById('newSessionOverlay');
+    function showNewSessionMenu() {
+      var rect = $btnNewSession.getBoundingClientRect();
+      $newSessionMenu.style.top = (rect.bottom + 6) + 'px';
+      $newSessionMenu.style.right = (window.innerWidth - rect.right) + 'px';
+      $newSessionMenu.classList.add('show');
+      $newSessionOverlay.classList.add('show');
+    }
+    function hideNewSessionMenu() {
+      $newSessionMenu.classList.remove('show');
+      $newSessionOverlay.classList.remove('show');
+    }
     $btnNewSession.addEventListener('click', function(e) {
       e.stopPropagation();
-      $newSessionMenu.classList.toggle('show');
+      if ($newSessionMenu.classList.contains('show')) { hideNewSessionMenu(); } else { showNewSessionMenu(); }
     });
-    document.addEventListener('click', function() { $newSessionMenu.classList.remove('show'); });
+    $newSessionOverlay.addEventListener('click', hideNewSessionMenu);
     $newSessionMenu.addEventListener('click', function(e) {
       e.stopPropagation();
       var btn = e.target.closest('.new-session-opt');
       if (!btn) return;
-      $newSessionMenu.classList.remove('show');
+      hideNewSessionMenu();
       var cwd = selectedId ? (allSessions.find(function(s){return s.id===selectedId}) || {}).cwd : '';
       var skip = btn.getAttribute('data-mode') === 'skip';
       client.newSession(cwd, skip ? { dangerouslySkipPermissions: true } : {});
@@ -986,5 +993,11 @@
     } // end setupSocket
   })();
   </script>
+  <!-- New session menu (fixed position, outside all containers) -->
+  <div class="new-session-overlay" id="newSessionOverlay"></div>
+  <div class="new-session-menu" id="newSessionMenu">
+    <button class="new-session-opt" data-mode="normal">普通模式</button>
+    <button class="new-session-opt" data-mode="skip">跳过权限 <span class="opt-tag">--dangerously-skip-permissions</span></button>
+  </div>
 </body>
 </html>
