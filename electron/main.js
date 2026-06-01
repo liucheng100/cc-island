@@ -125,11 +125,12 @@ function setupIPC() {
   ipcMain.handle('get-island-state', () => isIslandExpanded);
   ipcMain.handle('toggle-fullscreen', () => {
     if (!isIslandExpanded) {
-      // Expand first, then go fullscreen
       isIslandExpanded = true;
       isFullscreen = true;
-      preFullscreenBounds = { x: islandWindow.getPosition()[0], y: islandWindow.getPosition()[1], width: PANEL_W, height: PANEL_H };
+      preFullscreenBounds = { x: islandWindow.getPosition()[0], y: islandWindow.getPosition()[1] };
       const b = getFullscreenBounds();
+      islandWindow.setMinimumSize(b.width, b.height);
+      islandWindow.setMaximumSize(b.width, b.height);
       islandWindow.setBounds(b, false);
       islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
       islandWindow.webContents.send('island:expand');
@@ -137,15 +138,17 @@ function setupIPC() {
     }
     isFullscreen = !isFullscreen;
     if (isFullscreen) {
-      // Save current position before going fullscreen
       const [x, y] = islandWindow.getPosition();
-      preFullscreenBounds = { x, y, width: PANEL_W, height: PANEL_H };
+      preFullscreenBounds = { x, y };
       const b = getFullscreenBounds();
-      islandWindow.setBounds(b, true);
+      islandWindow.setMinimumSize(b.width, b.height);
+      islandWindow.setMaximumSize(b.width, b.height);
+      islandWindow.setBounds(b, false);
     } else {
-      // Restore to panel size at saved position
-      const b = preFullscreenBounds || { x: 0, y: 20, width: PANEL_W, height: PANEL_H };
-      islandWindow.setBounds({ x: b.x, y: b.y, width: PANEL_W, height: PANEL_H }, true);
+      const b = preFullscreenBounds || { x: 0, y: 20 };
+      islandWindow.setMinimumSize(PILL_W, PILL_H);
+      islandWindow.setMaximumSize(PANEL_W * 2, PANEL_H * 2);
+      islandWindow.setBounds({ x: b.x, y: b.y, width: PANEL_W, height: PANEL_H }, false);
       preFullscreenBounds = null;
     }
     islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
