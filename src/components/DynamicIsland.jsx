@@ -74,15 +74,37 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     return null;
   }, [activeSession]);
 
+  const [noTransition, setNoTransition] = useState(false);
+
+  const handleToggleFullscreen = useCallback(() => {
+    if (window.ccIsland) {
+      setNoTransition(true);
+      window.ccIsland.toggleFullscreen().then((v) => {
+        setIsFullscreen(v);
+        // Remove no-transition after the frame renders
+        requestAnimationFrame(() => requestAnimationFrame(() => setNoTransition(false)));
+      });
+    }
+  }, []);
+
   const handleMouseDown = useCallback((e) => {
     // Don't start drag if clicking a button
     if (e.target.closest('.btn-fullscreen')) return;
+    // Exit fullscreen on drag
+    if (isFullscreen && window.ccIsland) {
+      setNoTransition(true);
+      window.ccIsland.toggleFullscreen().then(() => {
+        setIsFullscreen(false);
+        requestAnimationFrame(() => requestAnimationFrame(() => setNoTransition(false)));
+      });
+      return;
+    }
     dragRef.current.dragging = true;
     dragRef.current.startX = e.screenX;
     dragRef.current.startY = e.screenY;
     dragRef.current.moved = false;
     setIsDragging(true);
-  }, []);
+  }, [isFullscreen]);
 
   useEffect(() => {
     const onMove = (e) => {
@@ -107,10 +129,6 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [onClick]);
 
-  const handleToggleFullscreen = useCallback(() => {
-    if (window.ccIsland) window.ccIsland.toggleFullscreen().then(setIsFullscreen);
-  }, []);
-
   // Sync fullscreen state on expand
   useEffect(() => {
     if (isExpanded && window.ccIsland) window.ccIsland.getFullscreenState().then(setIsFullscreen);
@@ -124,7 +142,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
   return (
     <div
       ref={islandRef}
-      className={`dynamic-island ${visualExpanded ? 'expanded' : ''} ${isFullscreen ? 'fullscreen' : ''} ${hasActivity ? 'has-activity' : ''} ${isDragging ? 'dragging' : ''} status-${dominantStatus}`}
+      className={`dynamic-island ${visualExpanded ? 'expanded' : ''} ${isFullscreen ? 'fullscreen' : ''} ${noTransition ? 'no-transition' : ''} ${hasActivity ? 'has-activity' : ''} ${isDragging ? 'dragging' : ''} status-${dominantStatus}`}
       style={{ '--status-color': glowColor, '--status-glow': `${glowColor}66`, '--status-glow-strong': `${glowColor}33` }}
     >
       {/* Pill header — always visible, draggable */}
@@ -230,12 +248,14 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
                       border-radius 0.35s cubic-bezier(0.4, 0, 0.2, 1),
                       background 0.5s ease, border-color 0.5s ease;
         }
+        .dynamic-island.no-transition { transition: none !important; }
+        .dynamic-island.no-transition::before { transition: none !important; }
         .dynamic-island.expanded {
           width: 420px; height: 640px; border-radius: 20px;
           background: linear-gradient(180deg, var(--bg-panel-top) 0%, var(--bg-panel-top) 52px, var(--bg-deep) 52px, var(--bg-panel-bot) 100%);
         }
         .dynamic-island.expanded.fullscreen {
-          width: 100%; height: 100%; border-radius: 0;
+          width: 100%; height: 100%; border-radius: 0; border: none;
         }
         .dynamic-island:not(.expanded).status-working {
           background: linear-gradient(135deg, rgba(99,102,241,0.5) 0%, var(--bg-panel-top) 60%, var(--bg-panel-top) 100%);
