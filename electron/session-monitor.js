@@ -610,7 +610,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               && !content.includes('<command-name>') && !content.includes('<local-command')) {
             lastUserContent = content.substring(0, 80);
           }
-          messages.push({ role: msg.role, content: content.substring(0, 500), timestamp: entry.timestamp || new Date().toISOString() });
+          messages.push({ role: msg.role, content: content, timestamp: entry.timestamp || new Date().toISOString() });
         } catch (e) {}
       }
       result.messages = messages;
