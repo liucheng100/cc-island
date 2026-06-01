@@ -637,50 +637,54 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
   // Batch-check which PIDs are still alive, clean up dead sessions
   async runHeartbeat() {
     if (this.sessions.size === 0) return;
-    const entries = Array.from(this.sessions.entries());
-    const pids = entries.map(([, s]) => s.pid);
+    try {
+      const entries = Array.from(this.sessions.entries());
+      const pids = entries.map(([, s]) => s.pid);
 
-    // Batch check all PIDs with a single PowerShell call
-    const alivePids = await this.checkPidsAlive(pids);
-    const aliveSet = new Set(alivePids);
-    const now = Date.now();
-    let changed = false;
+      // Batch check all PIDs with a single PowerShell call
+      const alivePids = await this.checkPidsAlive(pids);
+      const aliveSet = new Set(alivePids);
+      const now = Date.now();
+      let changed = false;
 
-    for (const [key, session] of entries) {
-      let dead = false;
+      for (const [key, session] of entries) {
+        let dead = false;
 
-      if (!aliveSet.has(session.pid)) {
-        // PID not found — double-check if terminal window still exists
-        const terminalPid = session.terminalPid || session.parentPid || session.pid;
-        if (session.pid !== terminalPid && aliveSet.has(terminalPid)) {
-          // Terminal still alive, claude process may have restarted — keep session for now
-          session.lastActivity = new Date().toISOString();
-          continue;
+        if (!aliveSet.has(session.pid)) {
+          // PID not found — double-check if terminal window still exists
+          const terminalPid = session.terminalPid || session.parentPid || session.pid;
+          if (session.pid !== terminalPid && aliveSet.has(terminalPid)) {
+            // Terminal still alive, claude process may have restarted — keep session for now
+            session.lastActivity = new Date().toISOString();
+            continue;
+          }
+          try {
+            const hwnd = win32.getConsoleWindowForPid(terminalPid);
+            if (!hwnd) dead = true;
+          } catch (e) { dead = true; }
         }
-        const hwnd = win32.getConsoleWindowForPid(terminalPid);
-        if (!hwnd) {
-          dead = true;
+
+        // Staleness timeout — unseen by scan for too long
+        const lastSeen = new Date(session.lastActivity).getTime();
+        if (!dead && (now - lastSeen > this.STALE_TIMEOUT_MS)) {
+          try {
+            const hwnd = win32.getConsoleWindowForPid(session.terminalPid || session.parentPid || session.pid);
+            if (!hwnd) dead = true;
+          } catch (e) { dead = true; }
+        }
+
+        if (dead) {
+          console.log(`[Heartbeat] Dead session: ${session.name} (${key}) pid=${session.pid}`);
+          this.sessions.delete(key);
+          changed = true;
         }
       }
 
-      // Staleness timeout — unseen by scan for too long
-      const lastSeen = new Date(session.lastActivity).getTime();
-      if (!dead && (now - lastSeen > this.STALE_TIMEOUT_MS)) {
-        const hwnd = win32.getConsoleWindowForPid(session.terminalPid || session.parentPid || session.pid);
-        if (!hwnd) {
-          dead = true;
-        }
+      if (changed) {
+        bus.emit('sessions-updated', this.getSessions());
       }
-
-      if (dead) {
-        console.log(`[Heartbeat] Dead session: ${session.name} (${key}) pid=${session.pid}`);
-        this.sessions.delete(key);
-        changed = true;
-      }
-    }
-
-    if (changed) {
-      bus.emit('sessions-updated', this.getSessions());
+    } catch (err) {
+      console.error('[Heartbeat] Error:', err.message);
     }
   }
 
