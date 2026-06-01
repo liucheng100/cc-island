@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('ccIsland', {
 
   toggleIsland: () => ipcRenderer.invoke('toggle-island'),
   getIslandState: () => ipcRenderer.invoke('get-island-state'),
+  toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
+  getFullscreenState: () => ipcRenderer.invoke('get-fullscreen-state'),
   collapseAnimationDone: () => ipcRenderer.invoke('collapse-animation-done'),
 
   getWechatStatus: () => ipcRenderer.invoke('get-wechat-status'),

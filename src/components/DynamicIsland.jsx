@@ -13,6 +13,7 @@ const STATUS_LABELS = {
 export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onClick, onShowQR, onSendMessage, onFocusCMD, onFocusChange, panelContent, onOpenSettings, showTips, toggleShortcut }) {
   const [isDragging, setIsDragging] = useState(false);
   const [visualExpanded, setVisualExpanded] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, moved: false });
   const islandRef = useRef(null);
 
@@ -104,6 +105,16 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [onClick]);
 
+  const handleToggleFullscreen = useCallback((e) => {
+    e.stopPropagation();
+    if (window.ccIsland) window.ccIsland.toggleFullscreen().then(setIsFullscreen);
+  }, []);
+
+  // Sync fullscreen state on expand
+  useEffect(() => {
+    if (isExpanded && window.ccIsland) window.ccIsland.getFullscreenState().then(setIsFullscreen);
+  }, [isExpanded]);
+
   const dominantStatus = activeSession?.status || (completedCount > 0 ? 'completed' : 'idle');
   const glowColor = STATUS_COLORS[dominantStatus] || STATUS_COLORS.working;
   const hasActivity = activeCount > 0;
@@ -164,6 +175,19 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
                 <svg width="12" height="12" viewBox="0 0 24 24" fill={wechatStatus.connected ? '#22c55e' : '#6b6b80'}>
                   <path d="M8.5 11a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm5 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm-6.5 3c0 2.5 4 3.5 6 3.5s6-1 6-3.5M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
                 </svg>
+              </div>
+            )}
+            {visualExpanded && (
+              <div className="btn-fullscreen" onClick={handleToggleFullscreen} title={isFullscreen ? '退出全屏' : '全屏模式'}>
+                {isFullscreen ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
+                  </svg>
+                )}
               </div>
             )}
             <div className={`expand-arrow ${visualExpanded ? 'expanded' : ''}`}>
@@ -297,6 +321,8 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
         .dot-more { font-size: 8px; color: var(--text-muted); margin-left: 2px; }
         .wechat-indicator { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; opacity: 0.5; transition: opacity var(--transition); }
         .wechat-indicator.connected { opacity: 1; }
+        .btn-fullscreen { display: flex; align-items: center; color: var(--text-muted); cursor: pointer; padding: 2px; border-radius: 4px; transition: all 0.15s; }
+        .btn-fullscreen:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
         .expand-arrow { display: flex; align-items: center; color: var(--text-muted); transition: transform var(--transition), color 0.3s; }
         .expand-arrow.expanded { transform: rotate(180deg); color: rgba(255,255,255,0.5); }
 

@@ -27,6 +27,16 @@ const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'develo
 const PILL_W = 340, PILL_H = 52;
 const PANEL_W = 420, PANEL_H = 640;
 
+let isFullscreen = false;
+function getFullscreenBounds() {
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const w = Math.floor(sw * 0.8);
+  const h = Math.floor(sh * 0.85);
+  const x = Math.floor((sw - w) / 2);
+  const y = Math.floor((sh - h) / 2);
+  return { x, y, width: w, height: h };
+}
+
 function getUrl() {
   if (isDev) return 'http://localhost:5173/';
   return `file://${path.join(__dirname, '..', 'dist', 'index.html')}`;
@@ -91,6 +101,7 @@ function expandIsland() {
 function collapseIsland() {
   if (!isIslandExpanded) return;
   isIslandExpanded = false;
+  isFullscreen = false;
   // Tell renderer to animate collapse; it will call back when done
   islandWindow.webContents.send('island:collapse');
 }
@@ -104,6 +115,20 @@ function setupIPC() {
   ipcMain.handle('get-session-detail', (_, id) => sessionMonitor ? sessionMonitor.getSessionDetail(id) : null);
   ipcMain.handle('toggle-island', () => { toggleIsland(); return isIslandExpanded; });
   ipcMain.handle('get-island-state', () => isIslandExpanded);
+  ipcMain.handle('toggle-fullscreen', () => {
+    if (!isIslandExpanded) expandIsland();
+    isFullscreen = !isFullscreen;
+    if (isFullscreen) {
+      const b = getFullscreenBounds();
+      islandWindow.setBounds(b, true);
+    } else {
+      const [x, y] = islandWindow.getPosition();
+      islandWindow.setBounds({ x: Math.min(x, screen.getPrimaryDisplay().workAreaSize.width - PANEL_W), y, width: PANEL_W, height: PANEL_H }, true);
+    }
+    islandWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    return isFullscreen;
+  });
+  ipcMain.handle('get-fullscreen-state', () => isFullscreen);
   ipcMain.handle('collapse-animation-done', () => {
     if (isIslandExpanded) return; // user re-expanded during animation, skip collapse
     const [x, y] = islandWindow.getPosition();
