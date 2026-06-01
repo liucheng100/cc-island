@@ -653,11 +653,12 @@
       $msgList.innerHTML = '';
       if (detail.messages && detail.messages.length > 0) {
         detail.messages.forEach(function(m) { appendMsg(m); });
-        // Update lastRenderedSeq to prevent gap detection loop
-        var lastMsg = detail.messages[detail.messages.length - 1];
-        // Note: HTTP-fetched messages don't have seq, so leave lastRenderedSeq
-        // for delta-based updates to handle. Reset to -1 so next delta starts fresh.
-        lastRenderedSeq = -1;
+        // Update lastRenderedSeq from loaded messages to prevent gap detection loop
+        var maxSeq = -1;
+        for (var i = 0; i < detail.messages.length; i++) {
+          if (detail.messages[i].seq !== undefined && detail.messages[i].seq > maxSeq) maxSeq = detail.messages[i].seq;
+        }
+        lastRenderedSeq = maxSeq >= 0 ? maxSeq : detail.messages.length - 1;
       } else {
         $msgList.innerHTML = '<div class="msg sys">暂无对话记录</div>';
       }
