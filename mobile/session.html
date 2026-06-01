@@ -777,6 +777,15 @@
     }
 
     var queueMode = false;
+    try { queueMode = sessionStorage.getItem('cc-queue-mode') === '1'; } catch(e) {}
+    // Apply persisted queue mode UI
+    if (queueMode) {
+      $btnQueueMode.className = 'btn-queue-mode active';
+      $sendBtn.style.background = 'rgba(99,102,241,0.15)';
+      $sendBtn.style.color = 'var(--accent)';
+      $sendBtn.innerHTML = '+Q';
+      $msgInput.placeholder = '输入指令加入队列...';
+    }
     var autoPlay = true;
     var countdown = 0;
     var countdownTimer = null;
@@ -855,6 +864,7 @@
     // Queue mode toggle
     $btnQueueMode.addEventListener('click', function() {
       queueMode = !queueMode;
+      try { sessionStorage.setItem('cc-queue-mode', queueMode ? '1' : '0'); } catch(e) {}
       $btnQueueMode.className = 'btn-queue-mode' + (queueMode ? ' active' : '');
       $sendBtn.style.background = queueMode ? 'rgba(99,102,241,0.15)' : '';
       $sendBtn.style.color = queueMode ? 'var(--accent)' : '';
