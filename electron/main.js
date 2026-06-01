@@ -30,12 +30,8 @@ const PANEL_W = 420, PANEL_H = 640;
 let isFullscreen = false;
 let preFullscreenBounds = null; // { x, y, width, height } before fullscreen
 function getFullscreenBounds() {
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  const w = Math.floor(sw * 0.8);
-  const h = Math.floor(sh * 0.85);
-  const x = Math.floor((sw - w) / 2);
-  const y = Math.floor((sh - h) / 2);
-  return { x, y, width: w, height: h };
+  const { x: wx, y: wy, width: sw, height: sh } = screen.getPrimaryDisplay().bounds;
+  return { x: wx, y: wy, width: sw, height: sh };
 }
 
 function getUrl() {
