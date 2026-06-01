@@ -188,12 +188,20 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
     return () => { if (unsub1) unsub1(); if (unsub2) unsub2(); };
   }, [selectedId]);
 
-  // Countdown display only — backend handles actual send
+  // Countdown → send when reaches 0
   useEffect(() => {
     if (countdown <= 0) return;
+    if (countdown === 1) {
+      // Will hit 0 on next tick — send now
+      const t = setTimeout(() => {
+        setCountdown(0);
+        if (window.ccIsland) window.ccIsland.sendNextFromQueue(selectedId);
+      }, 1000);
+      return () => clearTimeout(t);
+    }
     const t = setTimeout(() => setCountdown(c => c - 1), 1000);
     return () => clearTimeout(t);
-  }, [countdown]);
+  }, [countdown, selectedId]);
 
   // Clear optimistic message when server confirms (via sessions update)
   useEffect(() => {
@@ -492,12 +500,11 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                         >
                           <span className={`queue-cmd-idx ${i === 0 && countdown > 0 ? 'countdown' : ''}`} title={i === 0 ? '下一条执行' : '第' + (i + 1) + '条'}>{i === 0 && countdown > 0 ? countdown + 's' : i === 0 ? '▶' : i + 1}</span>
                           <span className="queue-cmd-text" title={cmd}>{cmd}</span>
-                          <button className="queue-cmd-send" onClick={() => {
-                            if (window.ccIsland) {
-                              window.ccIsland.removeFromQueue(selectedId, i);
-                              window.ccIsland.sendToSession(selectedId, cmd);
-                            }
-                          }} title="立即发送">▶</button>
+                          {i === 0 && (
+                            <button className="queue-cmd-send" onClick={() => {
+                              if (window.ccIsland) window.ccIsland.sendNextFromQueue(selectedId);
+                            }} title="立即发送">▶</button>
+                          )}
                           <button className="queue-cmd-del" onClick={() => window.ccIsland && window.ccIsland.removeFromQueue(selectedId, i)}>×</button>
                         </div>
                       ))}

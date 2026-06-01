@@ -26,6 +26,7 @@ class SessionMonitor extends EventEmitter {
     this._lastAutoSent = new Map(); // sessionKey → timestamp, prevent duplicate auto-send
     this._autoPlay = new Map(); // sessionKey → boolean
     this._autoPlayTimers = new Map(); // sessionKey → interval timer
+    this._countdownPending = new Map(); // sessionKey → boolean, prevent duplicate queue-auto-ready
     this._emptyScanStreak = 0; // count consecutive empty scans
     this._lastSessionsHash = ''; // track sessions state to skip redundant broadcasts
   }
@@ -41,46 +42,37 @@ class SessionMonitor extends EventEmitter {
       this._startAutoPlayPoll(sessionId);
     } else {
       this._stopAutoPlayPoll(sessionId);
+      this._countdownPending.delete(sessionId);
     }
   }
 
+  // Poll for completed sessions with queued commands — emits queue-auto-ready ONCE,
+  // then waits for frontend to call sendNextFromQueue (or cancelAutoSend to reset).
   _startAutoPlayPoll(sessionId) {
     this._stopAutoPlayPoll(sessionId);
-    let countdownTimer = null;
     const timer = setInterval(() => {
       if (!this.getAutoPlay(sessionId)) { this._stopAutoPlayPoll(sessionId); return; }
       const q = this.commandQueues.get(sessionId);
-      if (!q || q.length === 0) { if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; } return; }
+      if (!q || q.length === 0) { this._countdownPending.delete(sessionId); return; }
       const session = this.sessions.get(sessionId);
-      if (!session || session.status !== 'completed') { if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; } return; }
-      // Already counting down? Skip
-      if (countdownTimer) return;
-      // Emit event for frontend countdown UI
+      if (!session || session.status !== 'completed') { this._countdownPending.delete(sessionId); return; }
+      // Already emitted — waiting for frontend to send or cancel
+      if (this._countdownPending.get(sessionId)) return;
+      this._countdownPending.set(sessionId, true);
       bus.emit('queue-auto-ready', { sessionId, nextCommand: q[0] });
-      // Backend handles the actual send after 2s (independent of frontend)
-      countdownTimer = setTimeout(() => {
-        countdownTimer = null;
-        this.sendNextFromQueue(sessionId);
-      }, 2000);
     }, 1000);
     this._autoPlayTimers.set(sessionId, timer);
   }
 
   cancelAutoSend(sessionId) {
-    // Frontend cancels the countdown — do nothing, poll will re-check next tick
-    // The _startAutoPlayPoll's countdownTimer is local to the closure, can't clear it from here.
-    // Instead: temporarily disable autoPlay and re-enable to reset
-    this._stopAutoPlayPoll(sessionId);
-    this._startAutoPlayPoll(sessionId);
+    this._countdownPending.delete(sessionId);
   }
 
   _stopAutoPlayPoll(sessionId) {
     const t = this._autoPlayTimers.get(sessionId);
     if (t) { clearInterval(t); this._autoPlayTimers.delete(sessionId); }
   }
-  sendNextFromQueue(sessionId) {
-    return this.tryAutoSendNext(sessionId);
-  }
+
   addToQueue(sessionId, command) {
     if (!this.commandQueues.has(sessionId)) this.commandQueues.set(sessionId, []);
     this.commandQueues.get(sessionId).push(command);
@@ -89,15 +81,17 @@ class SessionMonitor extends EventEmitter {
     if (this.getAutoPlay(sessionId)) {
       const session = this.sessions.get(sessionId);
       if (session && session.status === 'completed') {
-        setTimeout(() => this.tryAutoSendNext(sessionId), 500);
+        this._countdownPending.delete(sessionId);
       }
     }
   }
+
   removeFromQueue(sessionId, index) {
     const q = this.commandQueues.get(sessionId);
     if (q) { q.splice(index, 1); if (q.length === 0) this.commandQueues.delete(sessionId); }
-    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
   }
+
   reorderQueue(sessionId, fromIndex, toIndex) {
     const q = this.commandQueues.get(sessionId);
     if (!q || fromIndex < 0 || toIndex < 0 || fromIndex >= q.length || toIndex >= q.length) return;
@@ -105,31 +99,33 @@ class SessionMonitor extends EventEmitter {
     q.splice(toIndex, 0, item);
     bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
   }
+
   clearQueue(sessionId) {
     this.commandQueues.delete(sessionId);
-    bus.emit('queue-updated', { sessionId, queue: [] });
+    this._countdownPending.delete(sessionId);
+    bus.emit('queue-updated', { sessionId, queue: [], autoPlay: this.getAutoPlay(sessionId) });
   }
 
-  // Auto-send next queued command when task completes
+  // Detect when session completes with queued commands — emit queue-auto-ready once
   tryAutoSendNext(sessionId) {
     const q = this.commandQueues.get(sessionId);
     if (!q || q.length === 0) return false;
     if (!this.getAutoPlay(sessionId)) return false;
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'completed') return false;
-    const lastSent = this._lastAutoSent.get(sessionId) || 0;
-    if (Date.now() - lastSent < 5000) return false;
-    this._lastAutoSent.set(sessionId, Date.now());
+    if (this._countdownPending.get(sessionId)) return false;
+    this._countdownPending.set(sessionId, true);
     bus.emit('queue-auto-ready', { sessionId, nextCommand: q[0] });
     return false;
   }
 
-  // Actually dequeue and send (called by frontend after countdown)
+  // Dequeue and send (called by frontend after countdown, or by manual ▶ button)
   sendNextFromQueue(sessionId) {
     const q = this.commandQueues.get(sessionId);
     if (!q || q.length === 0) return false;
     const cmd = q.shift();
     if (q.length === 0) this.commandQueues.delete(sessionId);
+    this._countdownPending.delete(sessionId);
     bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
     this.sendToSession(sessionId, cmd);
     return true;

@@ -863,7 +863,7 @@
         el.innerHTML = '<span class="queue-cmd-idx' + (isCountdown ? ' countdown' : '') + '" title="' + (i === 0 ? '下一条执行' : '第' + (i + 1) + '条') + '">' + (isCountdown ? countdown + 's' : i === 0 ? '▶' : i + 1) + '</span>' +
           '<span class="queue-cmd-text">' + escapeHtml(cmd) + '</span>' +
           '<button class="queue-cmd-send">▶</button><button class="queue-cmd-del">×</button>';
-        el.querySelector('.queue-cmd-send').addEventListener('click', function() { client.sendMessage(selectedId, cmd); client.removeFromQueue(selectedId, i); });
+        el.querySelector('.queue-cmd-send').addEventListener('click', function() { if (i === 0) { client.sendNextFromQueue(selectedId); } else { client.removeFromQueue(selectedId, i); } });
         el.querySelector('.queue-cmd-del').addEventListener('click', function() { client.removeFromQueue(selectedId, i); });
         el.addEventListener('dragstart', function(e) { el.classList.add('dragging'); e.dataTransfer.setData('text/plain', String(i)); });
         el.addEventListener('dragend', function() { el.classList.remove('dragging'); });
