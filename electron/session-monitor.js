@@ -82,6 +82,7 @@ class SessionMonitor extends EventEmitter {
       const session = this.sessions.get(sessionId);
       if (session && session.status === 'completed') {
         this._countdownPending.delete(sessionId);
+        setTimeout(() => this.tryAutoSendNext(sessionId), 100);
       }
     }
   }
