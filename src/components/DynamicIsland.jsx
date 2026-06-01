@@ -124,7 +124,7 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
   return (
     <div
       ref={islandRef}
-      className={`dynamic-island ${visualExpanded ? 'expanded' : ''} ${hasActivity ? 'has-activity' : ''} ${isDragging ? 'dragging' : ''} status-${dominantStatus}`}
+      className={`dynamic-island ${visualExpanded ? 'expanded' : ''} ${isFullscreen ? 'fullscreen' : ''} ${hasActivity ? 'has-activity' : ''} ${isDragging ? 'dragging' : ''} status-${dominantStatus}`}
       style={{ '--status-color': glowColor, '--status-glow': `${glowColor}66`, '--status-glow-strong': `${glowColor}33` }}
     >
       {/* Pill header — always visible, draggable */}
@@ -234,6 +234,9 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
           width: 420px; height: 640px; border-radius: 20px;
           background: linear-gradient(180deg, var(--bg-panel-top) 0%, var(--bg-panel-top) 52px, var(--bg-deep) 52px, var(--bg-panel-bot) 100%);
         }
+        .dynamic-island.expanded.fullscreen {
+          width: 100%; height: 100%; border-radius: 0;
+        }
         .dynamic-island:not(.expanded).status-working {
           background: linear-gradient(135deg, rgba(99,102,241,0.5) 0%, var(--bg-panel-top) 60%, var(--bg-panel-top) 100%);
           border-color: rgba(99,102,241,0.45);
@@ -268,6 +271,9 @@ export default function DynamicIsland({ sessions, isExpanded, wechatStatus, onCl
         }
         .dynamic-island.expanded::before {
           border-radius: calc(20px - 2px);
+        }
+        .dynamic-island.expanded.fullscreen::before {
+          border-radius: 0;
         }
         .dynamic-island:not(.expanded).has-activity::before { opacity: 0.25; animation: pulse-glow 2s ease-in-out infinite; }
         .dynamic-island.expanded::before {
