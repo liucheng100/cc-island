@@ -13,6 +13,7 @@ const { createTray } = require('./tray');
 const { SessionMonitor } = require('./session-monitor');
 const { LocalServer } = require('./local-server');
 const { WechatBridge } = require('./wechat-bridge');
+const bus = require('./message-bus');
 
 let islandWindow = null;
 let sessionMonitor = null;
@@ -139,6 +140,11 @@ function setupIPC() {
   ipcMain.handle('add-to-queue', (_, sessionId, cmd) => { if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd); });
   ipcMain.handle('remove-from-queue', (_, sessionId, index) => { if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index); });
   ipcMain.handle('clear-queue', (_, sessionId) => { if (sessionMonitor) sessionMonitor.clearQueue(sessionId); });
+  ipcMain.handle('set-auto-play', (_, sessionId, enabled) => { if (sessionMonitor) sessionMonitor.setAutoPlay(sessionId, enabled); });
+  ipcMain.handle('get-auto-play', (_, sessionId) => sessionMonitor ? sessionMonitor.getAutoPlay(sessionId) : false);
+  ipcMain.handle('send-next-from-queue', (_, sessionId) => sessionMonitor ? sessionMonitor.sendNextFromQueue(sessionId) : false);
+  ipcMain.handle('cancel-auto-send', (_, sessionId) => { if (sessionMonitor) sessionMonitor.cancelAutoSend(sessionId); });
+  ipcMain.handle('reorder-queue', (_, sessionId, from, to) => { if (sessionMonitor) sessionMonitor.reorderQueue(sessionId, from, to); });
 
   ipcMain.handle('new-claude-session', async (_, cwd) => {
     const { spawn } = require('child_process');
@@ -231,7 +237,8 @@ function setupIPC() {
         await localServer.start();
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
-        rewireServerEvents();
+      localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+        // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
     } else if (mode === 'ssh') {
@@ -244,7 +251,8 @@ function setupIPC() {
         await localServer.start();
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
-        rewireServerEvents();
+      localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+        // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
       localServer.startTunnel();
@@ -258,62 +266,14 @@ function setupIPC() {
         await localServer.start();
         localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
-        rewireServerEvents();
+      localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
+        // Events now on shared bus — no per-instance rewire needed
         if (sessionMonitor) localServer.broadcastSessions(sessionMonitor.getSessions());
       }
     }
   }
 
-  function rewireServerEvents() {
-    localServer.on('session-message', (sessionId, message) => {
-      if (sessionMonitor) sessionMonitor.sendToSession(sessionId, message);
-    });
-    localServer.on('focus-session', (sessionId) => {
-      if (sessionMonitor) sessionMonitor.focusSessionWindow(sessionId);
-    });
-    localServer.on('new-claude-session', (cwd) => {
-      const dir = (cwd && fs.existsSync(cwd)) ? cwd : require('os').homedir();
-      const child = require('child_process').spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
-        cwd: dir, detached: true, stdio: 'ignore', windowsHide: false,
-      });
-      child.unref();
-    });
-    localServer.on('wechat-message', (data) => {
-      if (!sessionMonitor) return;
-      const { sessionId, content } = data;
-      if (sessionId) { sessionMonitor.sendToSession(sessionId, content); }
-      else {
-        const sessions = sessionMonitor.getSessions();
-        const active = sessions.find((s) => s.status === 'working' || s.status === 'thinking' || s.status === 'answering');
-        if (active) sessionMonitor.sendToSession(active.id, content);
-      }
-    });
-    // Command queue
-    localServer.on('get-queue-resp', (socket, sessionId) => {
-      if (sessionMonitor && socket) {
-        socket.emit('queue-data', { sessionId, queue: sessionMonitor.getQueue(sessionId) });
-      }
-    });
-    localServer.on('add-to-queue', (sessionId, cmd) => {
-      if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd);
-    });
-    localServer.on('remove-from-queue', (sessionId, index) => {
-      if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index);
-    });
-    localServer.on('clear-queue', (sessionId) => {
-      if (sessionMonitor) sessionMonitor.clearQueue(sessionId);
-    });
-    localServer.on('auth-state-changed', () => {
-      if (localServer.broadcastAuthCheck) localServer.broadcastAuthCheck();
-      if (islandWindow && !islandWindow.isDestroyed()) {
-        islandWindow.webContents.send('auth-state-changed');
-        try {
-          const s = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
-          islandWindow.webContents.send('settings-changed', s);
-        } catch (e) {}
-      }
-    });
-  }
+  // All event listeners now registered once in app.whenReady via bus.on() — no rewire needed
 
   // Window drag — use known size to avoid drift/resize from getSize() rounding
   ipcMain.on('move-window', (event, dx, dy) => {
@@ -351,6 +311,7 @@ app.whenReady().then(async () => {
   await localServer.start();
   localServer.setSessionDetailProvider((id) => sessionMonitor.getSessionDetail(id));
       localServer.getQueueForSession = (id) => sessionMonitor.getQueue(id);
+      localServer.getAutoPlayForSession = (id) => sessionMonitor.getAutoPlay(id);
   wechatBridge = new WechatBridge(localServer);
   wechatBridge.init();
   createIslandWindow();
@@ -391,35 +352,42 @@ app.whenReady().then(async () => {
 
   try { new Notification({ title: 'CC Island', body: '灵动岛已启动', silent: true }).show(); } catch (e) {}
 
-  sessionMonitor.on('sessions-updated', (sessions) => {
+  bus.on('sessions-updated', (sessions) => {
     if (islandWindow && !islandWindow.isDestroyed()) islandWindow.webContents.send('sessions:updated', sessions);
     if (localServer) localServer.broadcastSessions(sessions);
   });
 
-  sessionMonitor.on('session-messages-changed', (data) => {
+  bus.on('session-messages-changed', (data) => {
     if (localServer) localServer.onMessagesChanged(data);
   });
 
-  sessionMonitor.on('queue-updated', (data) => {
+  bus.on('queue-updated', (data) => {
     if (islandWindow && !islandWindow.isDestroyed()) {
       islandWindow.webContents.send('queue-updated', data);
     }
     if (localServer) localServer.onQueueUpdated(data);
   });
 
+  bus.on('queue-auto-ready', (data) => {
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('queue-auto-ready', data);
+    }
+    if (localServer) localServer.onQueueAutoReady(data);
+  });
+
   wechatBridge.on('status-changed', (status) => {
     if (islandWindow && !islandWindow.isDestroyed()) islandWindow.webContents.send('wechat:status', status);
   });
 
-  localServer.on('session-message', (sessionId, message) => {
+  bus.on('session-message', (sessionId, message) => {
     if (sessionMonitor) sessionMonitor.sendToSession(sessionId, message);
   });
 
-  localServer.on('focus-session', (sessionId) => {
+  bus.on('focus-session', (sessionId) => {
     if (sessionMonitor) sessionMonitor.focusSessionWindow(sessionId);
   });
 
-  localServer.on('new-claude-session', (cwd) => {
+  bus.on('new-claude-session', (cwd) => {
     const { spawn } = require('child_process');
     const dir = (cwd && fs.existsSync(cwd)) ? cwd : require('os').homedir();
     const child = spawn('cmd.exe', ['/c', 'start', '"Claude"', 'cmd.exe', '/K', 'claude'], {
@@ -429,22 +397,31 @@ app.whenReady().then(async () => {
   });
 
   // Command queue
-  localServer.on('get-queue-resp', (socket, sessionId) => {
+  bus.on('get-queue-resp', (socket, sessionId) => {
     if (sessionMonitor && socket) {
       socket.emit('queue-data', { sessionId, queue: sessionMonitor.getQueue(sessionId) });
     }
   });
-  localServer.on('add-to-queue', (sessionId, cmd) => {
+  bus.on('add-to-queue', (sessionId, cmd) => {
     if (sessionMonitor) sessionMonitor.addToQueue(sessionId, cmd);
   });
-  localServer.on('remove-from-queue', (sessionId, index) => {
+  bus.on('remove-from-queue', (sessionId, index) => {
     if (sessionMonitor) sessionMonitor.removeFromQueue(sessionId, index);
   });
-  localServer.on('clear-queue', (sessionId) => {
+  bus.on('clear-queue', (sessionId) => {
     if (sessionMonitor) sessionMonitor.clearQueue(sessionId);
   });
+  bus.on('reorder-queue', (sessionId, from, to) => {
+    if (sessionMonitor) sessionMonitor.reorderQueue(sessionId, from, to);
+  });
+  bus.on('set-auto-play', (sessionId, enabled) => {
+    if (sessionMonitor) sessionMonitor.setAutoPlay(sessionId, enabled);
+  });
+  bus.on('send-next-from-queue', (sessionId) => {
+    if (sessionMonitor) sessionMonitor.sendNextFromQueue(sessionId);
+  });
 
-  localServer.on('auth-state-changed', () => {
+  bus.on('auth-state-changed', () => {
     // Kick all sockets that no longer pass auth
     if (localServer.broadcastAuthCheck) localServer.broadcastAuthCheck();
     if (islandWindow && !islandWindow.isDestroyed()) {

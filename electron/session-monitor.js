@@ -207,7 +207,6 @@ class SessionMonitor extends EventEmitter {
             _lastFileMtime: convData.fileMtime || 0,
           };
           this.sessions.set(key, session);
-          this._lastMsgCount.set(key, convData.messages ? convData.messages.length : 0);
         } else {
           const existing = this.sessions.get(key);
           existing.pid = proc.pid;
