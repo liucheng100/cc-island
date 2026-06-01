@@ -2,6 +2,8 @@ const { EventEmitter } = require('events');
 const { exec } = require('child_process');
 const { clipboard } = require('electron');
 const win32 = require('./win32-utils');
+const bus = require('./message-bus');
+const { MessageStore } = require('./message-store');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -19,41 +21,116 @@ class SessionMonitor extends EventEmitter {
     this.processInfoCache = new Map();
     this.cwdCache = new Map();
     this.scanRunning = false;
-    this._lastMsgCount = new Map(); // sessionKey → message count, for delta detection
+    this.msgStore = new MessageStore(); // unified message state
     this.commandQueues = new Map(); // sessionKey → string[]
     this._lastAutoSent = new Map(); // sessionKey → timestamp, prevent duplicate auto-send
+    this._autoPlay = new Map(); // sessionKey → boolean
+    this._autoPlayTimers = new Map(); // sessionKey → interval timer
     this._emptyScanStreak = 0; // count consecutive empty scans
     this._lastSessionsHash = ''; // track sessions state to skip redundant broadcasts
   }
 
   // === Command Queue ===
   getQueue(sessionId) { return this.commandQueues.get(sessionId) || []; }
+  getAutoPlay(sessionId) { return this._autoPlay.has(sessionId) ? !!this._autoPlay.get(sessionId) : true; }
+
+  setAutoPlay(sessionId, enabled) {
+    this._autoPlay.set(sessionId, enabled);
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: enabled });
+    if (enabled) {
+      this._startAutoPlayPoll(sessionId);
+    } else {
+      this._stopAutoPlayPoll(sessionId);
+    }
+  }
+
+  _startAutoPlayPoll(sessionId) {
+    this._stopAutoPlayPoll(sessionId);
+    let countdownTimer = null;
+    const timer = setInterval(() => {
+      if (!this.getAutoPlay(sessionId)) { this._stopAutoPlayPoll(sessionId); return; }
+      const q = this.commandQueues.get(sessionId);
+      if (!q || q.length === 0) { if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; } return; }
+      const session = this.sessions.get(sessionId);
+      if (!session || session.status !== 'completed') { if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; } return; }
+      // Already counting down? Skip
+      if (countdownTimer) return;
+      // Emit event for frontend countdown UI
+      bus.emit('queue-auto-ready', { sessionId, nextCommand: q[0] });
+      // Backend handles the actual send after 2s (independent of frontend)
+      countdownTimer = setTimeout(() => {
+        countdownTimer = null;
+        this.sendNextFromQueue(sessionId);
+      }, 2000);
+    }, 1000);
+    this._autoPlayTimers.set(sessionId, timer);
+  }
+
+  cancelAutoSend(sessionId) {
+    // Frontend cancels the countdown — do nothing, poll will re-check next tick
+    // The _startAutoPlayPoll's countdownTimer is local to the closure, can't clear it from here.
+    // Instead: temporarily disable autoPlay and re-enable to reset
+    this._stopAutoPlayPoll(sessionId);
+    this._startAutoPlayPoll(sessionId);
+  }
+
+  _stopAutoPlayPoll(sessionId) {
+    const t = this._autoPlayTimers.get(sessionId);
+    if (t) { clearInterval(t); this._autoPlayTimers.delete(sessionId); }
+  }
+  sendNextFromQueue(sessionId) {
+    return this.tryAutoSendNext(sessionId);
+  }
   addToQueue(sessionId, command) {
     if (!this.commandQueues.has(sessionId)) this.commandQueues.set(sessionId, []);
     this.commandQueues.get(sessionId).push(command);
-    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
+    // Immediate check: if autoPlay is on and session is completed, trigger now
+    if (this.getAutoPlay(sessionId)) {
+      const session = this.sessions.get(sessionId);
+      if (session && session.status === 'completed') {
+        setTimeout(() => this.tryAutoSendNext(sessionId), 500);
+      }
+    }
   }
   removeFromQueue(sessionId, index) {
     const q = this.commandQueues.get(sessionId);
     if (q) { q.splice(index, 1); if (q.length === 0) this.commandQueues.delete(sessionId); }
-    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+  }
+  reorderQueue(sessionId, fromIndex, toIndex) {
+    const q = this.commandQueues.get(sessionId);
+    if (!q || fromIndex < 0 || toIndex < 0 || fromIndex >= q.length || toIndex >= q.length) return;
+    const item = q.splice(fromIndex, 1)[0];
+    q.splice(toIndex, 0, item);
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
   }
   clearQueue(sessionId) {
     this.commandQueues.delete(sessionId);
-    this.emit('queue-updated', { sessionId, queue: [] });
+    bus.emit('queue-updated', { sessionId, queue: [] });
   }
 
   // Auto-send next queued command when task completes
   tryAutoSendNext(sessionId) {
     const q = this.commandQueues.get(sessionId);
     if (!q || q.length === 0) return false;
-    // Prevent duplicate auto-send within 3s
+    if (!this.getAutoPlay(sessionId)) return false;
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'completed') return false;
     const lastSent = this._lastAutoSent.get(sessionId) || 0;
-    if (Date.now() - lastSent < 3000) return false;
+    if (Date.now() - lastSent < 5000) return false;
+    this._lastAutoSent.set(sessionId, Date.now());
+    bus.emit('queue-auto-ready', { sessionId, nextCommand: q[0] });
+    return false;
+  }
+
+  // Actually dequeue and send (called by frontend after countdown)
+  sendNextFromQueue(sessionId) {
+    const q = this.commandQueues.get(sessionId);
+    if (!q || q.length === 0) return false;
     const cmd = q.shift();
     if (q.length === 0) this.commandQueues.delete(sessionId);
-    this._lastAutoSent.set(sessionId, Date.now());
-    this.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId) });
+    bus.emit('queue-updated', { sessionId, queue: this.getQueue(sessionId), autoPlay: this.getAutoPlay(sessionId) });
     this.sendToSession(sessionId, cmd);
     return true;
   }
@@ -94,6 +171,13 @@ class SessionMonitor extends EventEmitter {
       const processes = await this.findClaudeProcesses();
       const currentKeys = new Set();
 
+      // Pre-seed cache with wmic data and prefetch parent PIDs
+      for (const proc of processes) {
+        if (proc.name) this.processInfoCache.set(proc.pid, { info: { Name: proc.name, ParentProcessId: proc.parentPid || 0 }, ts: Date.now() });
+      }
+      const parentPids = [...new Set(processes.map(p => p.parentPid).filter(p => p && p > 0))];
+      await this.batchPrefetchProcessInfo(parentPids);
+
       for (const proc of processes) {
         const meta = await this.readSessionMeta(proc.pid);
         const rawCwd = proc.cwd || meta.cwd || await this.extractCwd(proc.pid, proc.commandLine, proc.name);
@@ -124,7 +208,6 @@ class SessionMonitor extends EventEmitter {
           };
           this.sessions.set(key, session);
           this._lastMsgCount.set(key, convData.messages ? convData.messages.length : 0);
-          console.log(`[SessionMonitor] New: ${title} (${key}) pid=${proc.pid} terminal=${terminalPid} cwd=${cwd} status=${session.status}`);
         } else {
           const existing = this.sessions.get(key);
           existing.pid = proc.pid;
@@ -136,15 +219,12 @@ class SessionMonitor extends EventEmitter {
 
           const convData = await this.readConversationByPid(proc.pid, meta.sessionId || existing.sessionId, cwd);
           if (convData.messages && convData.messages.length > 0) {
-            const prevCount = this._lastMsgCount.get(key) || 0;
-            const newCount = convData.messages.length;
-            if (newCount > prevCount) {
-              const delta = convData.messages.slice(prevCount);
-              this._lastMsgCount.set(key, newCount);
-              existing.messages = convData.messages;
-              this.emit('session-messages-changed', { sessionId: key, messages: existing.messages, delta, status: existing.status });
-            } else if (newCount >= (existing.messages ? existing.messages.length : 0)) {
-              existing.messages = convData.messages;
+            const delta = this.msgStore.syncFromFile(key, convData.messages);
+            if (delta && delta.length > 0) {
+              existing.messages = this.msgStore.getMessages(key);
+              bus.emit('session-messages-changed', { sessionId: key, messages: existing.messages, delta, status: existing.status, lastSeq: this.msgStore.getCount(key) - 1 });
+            } else {
+              existing.messages = this.msgStore.getMessages(key);
             }
           }
           if (convData.fileMtime) existing._lastFileMtime = convData.fileMtime;
@@ -161,10 +241,7 @@ class SessionMonitor extends EventEmitter {
               // Don't complete if we just sent a message (<5s ago)
               if (!existing._justSent || Date.now() - existing._justSent > 5000) {
                 existing.status = 'completed';
-                // Auto-send next queued command
-                if (this.commandQueues.has(key) && this.commandQueues.get(key).length > 0) {
-                  setTimeout(() => this.tryAutoSendNext(key), 500);
-                }
+                // Auto-send handled by _startAutoPlayPoll per-session timer
               }
             }
           } else if (convData.status) {
@@ -185,7 +262,6 @@ class SessionMonitor extends EventEmitter {
       }
       for (const [key, session] of this.sessions) {
         if (!currentKeys.has(key)) {
-          console.log(`[SessionMonitor] Removed: ${session.name} (${key})`);
           this.sessions.delete(key);
         }
       }
@@ -194,7 +270,7 @@ class SessionMonitor extends EventEmitter {
       const hash = sessions.map(s => s.id + ':' + s.status + ':' + s.messageCount).sort().join(',');
       if (hash !== this._lastSessionsHash) {
         this._lastSessionsHash = hash;
-        this.emit('sessions-updated', sessions);
+        bus.emit('sessions-updated', sessions);
       }
     } catch (err) {
       console.error('[SessionMonitor] Scan error:', err.message);
@@ -207,7 +283,6 @@ class SessionMonitor extends EventEmitter {
     return new Promise((resolve) => {
       // Step 1: tasklist via exec (handles encoding, buffers output)
       exec('tasklist /FO CSV /NH', { timeout: 5000 }, (tlErr, tlOut) => {
-        if (tlErr || !tlOut) { resolve([]); return; }
         const candidateNames = new Set(['node.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe', 'claude.exe']);
         const candidates = [];
         const lines = tlOut.split('\n');
@@ -218,12 +293,10 @@ class SessionMonitor extends EventEmitter {
           if (!candidateNames.has(name)) continue;
           candidates.push({ pid: parseInt(m[2]), name: m[1] });
         }
-        if (candidates.length === 0) { resolve([]); return; }
 
         // Step 2: get command lines via single batch wmic query
         const pidFilter = candidates.map(c => `ProcessId=${c.pid}`).join(' or ');
         exec(`wmic process where "${pidFilter}" get ProcessId,ParentProcessId,Name,CommandLine /format:csv 2>nul`, { timeout: 5000 }, (wmicErr, wmicOut) => {
-          if (wmicErr || !wmicOut) { resolve([]); return; }
           const results = [];
           const wmicLines = wmicOut.split('\n').filter(l => l.trim());
           // Parse header to find column positions (wmic reorders columns!)
@@ -266,12 +339,9 @@ class SessionMonitor extends EventEmitter {
     // Try --cwd/--dir from command line
     const cwdMatch = cmdLine.match(/(?:--cwd|--dir)\s+["']?([^"'\s]+)/i);
     if (cwdMatch && fs.existsSync(cwdMatch[1])) { this.cwdCache.set(pid, { cwd: cwdMatch[1], ts: Date.now() }); return cwdMatch[1]; }
-    // For standalone claude.exe (uv/pipx), query CWD directly from the process
-    if (processName === 'claude.exe') {
-      const directCwd = await this.queryProcessCwd(pid);
-      if (directCwd && fs.existsSync(directCwd)) { this.cwdCache.set(pid, { cwd: directCwd, ts: Date.now() }); return directCwd; }
-    }
-    const parentPid = await this.getParentPid(pid);
+    // Try cached process info to get parent PID (avoids PowerShell call)
+    const cachedInfo = this.processInfoCache.get(pid);
+    const parentPid = cachedInfo?.info?.ParentProcessId || 0;
     if (parentPid) {
       const cwdFromTitle = await this.getCwdFromWindowTitle(parentPid);
       if (cwdFromTitle && fs.existsSync(cwdFromTitle)) { this.cwdCache.set(pid, { cwd: cwdFromTitle, ts: Date.now() }); return cwdFromTitle; }
@@ -364,6 +434,36 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
         if (m && fs.existsSync(m[1])) { resolve(m[1]); return; }
         if (fs.existsSync(title)) { resolve(title); return; }
         resolve(null);
+      });
+    });
+  }
+
+  // Batch prefetch: populate processInfoCache for many PIDs in a single PowerShell call
+  async batchPrefetchProcessInfo(pids) {
+    const uncached = pids.filter(pid => {
+      const c = this.processInfoCache.get(pid);
+      return !c || Date.now() - c.ts >= 30000;
+    });
+    if (uncached.length === 0) return;
+    return new Promise((resolve) => {
+      const filter = uncached.map(pid => `ProcessId=${pid}`).join(' or ');
+      exec(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter '${filter}' | Select-Object ProcessId,Name,ParentProcessId | ConvertTo-Csv -NoTypeInformation"`, { timeout: 8000 }, (err, stdout) => {
+        if (!err && stdout) {
+          const lines = stdout.trim().split('\n').slice(1);
+          for (const line of lines) {
+            try {
+              const parts = line.replace(/"/g, '').split(',');
+              const pid = parseInt(parts[0]);
+              const info = { Name: (parts[1] || '').trim(), ParentProcessId: parseInt(parts[2]) || 0 };
+              if (pid) this.processInfoCache.set(pid, { info, ts: Date.now() });
+            } catch (e) {}
+          }
+        }
+        // Mark uncached PIDs as null so they don't get re-queried
+        for (const pid of uncached) {
+          if (!this.processInfoCache.has(pid)) this.processInfoCache.set(pid, { info: null, ts: Date.now() });
+        }
+        resolve();
       });
     });
   }
@@ -575,7 +675,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
     }
 
     if (changed) {
-      this.emit('sessions-updated', this.getSessions());
+      bus.emit('sessions-updated', this.getSessions());
     }
   }
 
@@ -600,13 +700,13 @@ Write-Output ($alive -join ',')
   }
 
   getSessions() {
-    return Array.from(this.sessions.values()).map((s) => ({ ...s, messageCount: s.messages ? s.messages.length : 0 }));
+    return Array.from(this.sessions.values()).map((s) => ({ ...s, messageCount: this.msgStore.getCount(s.id) }));
   }
 
   getSessionDetail(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    return { ...session, messages: session.messages || [] };
+    return { ...session, messages: this.msgStore.getMessages(sessionId) };
   }
 
   async focusSessionWindow(sessionId) {
@@ -628,20 +728,18 @@ Write-Output ($alive -join ',')
     const session = this.sessions.get(sessionId);
     if (!session) return { success: false, error: 'Session not found' };
     if (!session.messages) session.messages = [];
-    const newMsg = { role: 'user', content: message, timestamp: new Date().toISOString() };
-    session.messages.push(newMsg);
-    this._lastMsgCount.set(sessionId, session.messages.length);
+    const entry = this.msgStore.appendMessage(sessionId, { role: 'user', content: message, timestamp: new Date().toISOString() });
+    session.messages = this.msgStore.getMessages(sessionId);
     session.lastActivity = new Date().toISOString();
-    // Immediately show thinking state on all clients
     session.status = 'thinking';
     session._justSent = Date.now();
-    this.emit('sessions-updated', this.getSessions());
-    // Push delta to socket clients immediately (no wait for scan)
-    this.emit('session-messages-changed', {
+    bus.emit('sessions-updated', this.getSessions());
+    bus.emit('session-messages-changed', {
       sessionId,
       messages: session.messages,
-      delta: [newMsg],
+      delta: [entry],
       status: session.status,
+      lastSeq: entry.seq,
     });
     const terminalPid = session.terminalPid || session.parentPid || session.pid;
     console.log('[Send] pid=' + session.pid + ' terminal=' + terminalPid + ' msg=' + message.substring(0, 50));
