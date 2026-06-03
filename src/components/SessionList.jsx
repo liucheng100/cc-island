@@ -61,7 +61,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   const [selectedId, setSelectedId] = useState(null);
   const [inputValues, setInputValues] = useState({});
   const [isSending, setIsSending] = useState(false);
-  const [toolExpanded, setToolExpanded] = useState(true);
+  const [collapsedTools, setCollapsedTools] = useState(new Set()); // Set of indices that are collapsed
   const [pendingSend, setPendingSend] = useState(false);
   const [sendError, setSendError] = useState(null);
   const [optimisticMsg, setOptimisticMsg] = useState(null);
@@ -470,16 +470,16 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                     const showLoading = isLastUser && (isSending || pendingSend);
                     const tool = !isUser ? parseToolMsg(msg.content) : null;
                     if (tool) {
-                      const expanded = toolExpanded;
+                      const collapsed = collapsedTools.has(i);
                       return (
                         <div key={i} className="msg-row msg-row-claude">
-                          <div className={`bubble-claude tool-card ${expanded ? 'tool-expanded' : 'tool-collapsed'}`}>
-                            <div className="tool-header" onClick={() => setToolExpanded(!toolExpanded)}>
+                          <div className={`bubble-claude tool-card ${collapsed ? 'tool-collapsed' : 'tool-expanded'}`}>
+                            <div className="tool-header" onClick={() => setCollapsedTools(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next; })}>
                               <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
-                              {!expanded && tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
-                              <span className="tool-arrow">{expanded ? '▼' : '▶'}</span>
+                              {collapsed && tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
+                              <span className="tool-arrow">{collapsed ? '▶' : '▼'}</span>
                             </div>
-                            {expanded && tool.fullContent && (
+                            {!collapsed && tool.fullContent && (
                               <div className="tool-body">
                                 <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(tool.fullContent) }} />
                               </div>
@@ -803,7 +803,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           overflow-x: auto;
         }
         /* Tool message cards */
-        .tool-card { padding: 6px 10px; }
+        .tool-card { padding: 6px 10px; border-radius: 12px; border-bottom-left-radius: 4px; }
         .tool-card .tool-header { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
         .tool-card.tool-expanded .tool-header { margin-bottom: 6px; }
         .tool-badge {
