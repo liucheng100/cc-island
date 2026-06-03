@@ -604,8 +604,9 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (typeof msg.content === 'string') {
             content = msg.content;
           } else if (Array.isArray(msg.content)) {
-            content = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join(' ')
-              || msg.content.filter(c => c.type === 'tool_use').map(c => `[${c.name}]`).join(' ');
+            content = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join(' ');
+            // Skip pure tool-use messages (no text content)
+            if (!content) continue;
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
