@@ -592,8 +592,25 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
       const content = fs.readFileSync(convPath, 'utf-8');
       const lines = content.trim().split('\n');
       const messages = [];
+      const toolResults = new Map(); // tool_use_id → result text
       let lastUserContent = null;
       const now = Date.now();
+
+      // First pass: collect tool_result content indexed by tool_use_id
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          const msg = entry.message;
+          if (!msg || !Array.isArray(msg.content)) continue;
+          for (const c of msg.content) {
+            if (c.type === 'tool_result' && c.tool_use_id && c.content && !c.is_error) {
+              toolResults.set(c.tool_use_id, String(c.content));
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Second pass: build messages, merging tool_use + tool_result
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
@@ -607,7 +624,6 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           } else if (Array.isArray(msg.content)) {
             const thinkingParts = msg.content.filter(c => c.type === 'thinking').map(c => '[thinking] ' + (c.thinking || c.text || ''));
             const textParts = msg.content.filter(c => c.type === 'text').map(c => c.text || '');
-            const resultParts = msg.content.filter(c => c.type === 'tool_result' && c.content && !c.is_error).map(c => String(c.content));
             const toolParts = msg.content.filter(c => c.type === 'tool_use').map(c => {
               const name = c.name || 'tool';
               const input = c.input || {};
@@ -621,9 +637,15 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
                 return `[Plan] ${input.plan.substring(0, 200)}`;
               }
               const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || input.message || '';
-              return summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
+              let result = summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
+              // Append matching tool_result if exists
+              if (c.id && toolResults.has(c.id)) {
+                result += '\n' + toolResults.get(c.id);
+                toolResults.delete(c.id); // consumed
+              }
+              return result;
             });
-            content = [...thinkingParts, ...textParts, ...toolParts, ...resultParts].join('\n');
+            content = [...thinkingParts, ...textParts, ...toolParts].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
@@ -633,6 +655,8 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>'))) {
             msg = { ...msg, role: 'system' };
           }
+          // Skip pure user messages that only had tool_result (now merged into tool_use)
+          if (msg.role === 'user' && Array.isArray(rawMsg.content) && rawMsg.content.every(c => c.type === 'tool_result')) continue;
           if (msg.role === 'user' && content.length > 5
               && !content.includes('<command-name>') && !content.includes('<local-command')) {
             lastUserContent = content.substring(0, 80);
