@@ -623,8 +623,6 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || input.message || '';
               return summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
             });
-            // Skip pure tool_result messages (command output, git output, etc.)
-            if (resultParts.length > 0 && textParts.length === 0 && toolParts.length === 0 && thinkingParts.length === 0) continue;
             content = [...thinkingParts, ...textParts, ...toolParts, ...resultParts].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
