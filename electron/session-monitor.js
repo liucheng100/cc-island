@@ -604,8 +604,14 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (typeof msg.content === 'string') {
             content = msg.content;
           } else if (Array.isArray(msg.content)) {
-            content = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join(' ')
-              || msg.content.filter(c => c.type === 'tool_use').map(c => `[${c.name}]`).join(' ');
+            const textParts = msg.content.filter(c => c.type === 'text').map(c => c.text || '');
+            const toolParts = msg.content.filter(c => c.type === 'tool_use').map(c => {
+              const name = c.name || 'tool';
+              const input = c.input || {};
+              const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || '';
+              return summary ? `[${name}] ${summary.substring(0, 100)}` : `[${name}]`;
+            });
+            content = [...textParts, ...toolParts].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
