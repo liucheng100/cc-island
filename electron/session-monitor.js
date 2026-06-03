@@ -605,6 +605,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (typeof msg.content === 'string') {
             content = msg.content;
           } else if (Array.isArray(msg.content)) {
+            const thinkingParts = msg.content.filter(c => c.type === 'thinking').map(c => '[thinking] ' + (c.thinking || c.text || ''));
             const textParts = msg.content.filter(c => c.type === 'text').map(c => c.text || '');
             const toolParts = msg.content.filter(c => c.type === 'tool_use').map(c => {
               const name = c.name || 'tool';
@@ -623,7 +624,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || input.message || '';
               return summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
             });
-            content = [...textParts, ...toolParts].join('\n');
+            content = [...thinkingParts, ...textParts, ...toolParts].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
