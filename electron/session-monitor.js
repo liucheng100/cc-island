@@ -645,7 +645,9 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               }
               return result;
             });
-            content = [...thinkingParts, ...textParts, ...toolParts].join('\n');
+            // Show tool_results that weren't consumed by a matching tool_use
+            const leftoverResults = msg.content.filter(c => c.type === 'tool_result' && c.content && !c.is_error && toolResults.has(c.tool_use_id)).map(c => String(c.content));
+            content = [...thinkingParts, ...textParts, ...toolParts, ...leftoverResults].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
@@ -655,8 +657,8 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>'))) {
             msg = { ...msg, role: 'system' };
           }
-          // Skip pure user messages that only had tool_result (now merged into tool_use)
-          if (msg.role === 'user' && Array.isArray(rawMsg.content) && rawMsg.content.every(c => c.type === 'tool_result')) continue;
+          // Skip pure tool_result user messages only if all results were consumed by tool_use
+          if (msg.role === 'user' && Array.isArray(rawMsg.content) && rawMsg.content.every(c => c.type === 'tool_result') && leftoverResults && leftoverResults.length === 0) continue;
           if (msg.role === 'user' && content.length > 5
               && !content.includes('<command-name>') && !content.includes('<local-command')) {
             lastUserContent = content.substring(0, 80);

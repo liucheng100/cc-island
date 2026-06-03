@@ -812,7 +812,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         .tool-arrow-open { transform: rotate(90deg); }
         .tool-card.tool-collapsed .tool-body { display: none; }
         .tool-card.tool-expanded .tool-body { display: block; }
-        .tool-badge.tool-thinking { background: rgba(255,255,255,0.06); color: var(--text-secondary); font-style: italic; font-size: 10px; }
+        .tool-badge.tool-thinking { background: rgba(255,255,255,0.06); color: var(--text-secondary); font-style: italic; }
         .tool-badge.tool-bash { background: rgba(34,197,94,0.2); color: #4ade80; }
         .tool-badge.tool-read { background: rgba(96,165,250,0.2); color: #93bbfd; }
         .tool-badge.tool-write, .tool-badge.tool-edit { background: rgba(251,191,36,0.2); color: #fcd34d; }
