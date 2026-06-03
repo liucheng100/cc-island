@@ -598,8 +598,9 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
         try {
           const entry = JSON.parse(line);
           if (entry.type === 'file-history-snapshot' || entry.isMeta || entry.type === 'system') continue;
-          const msg = entry.message;
-          if (!msg || !msg.role) continue;
+          const rawMsg = entry.message;
+          if (!rawMsg || !rawMsg.role) continue;
+          let msg = rawMsg;
           let content = '';
           if (typeof msg.content === 'string') {
             content = msg.content;
