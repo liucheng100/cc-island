@@ -54,7 +54,10 @@ class MessageStore extends EventEmitter {
     }
 
     if (newCount < prevCount) {
-      // File lost messages (shouldn't happen) — don't regress
+      // Parsing logic changed (e.g. merging reduced count) — full refresh
+      this._messages.set(sessionId, fileMessages ? fileMessages.slice() : []);
+      this._fileCount.set(sessionId, newCount);
+      this._dirty.delete(sessionId);
       return null;
     }
 
