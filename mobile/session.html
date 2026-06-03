@@ -258,17 +258,36 @@
     }
     .btn-theme:active { background: var(--accent-dim); }
     /* Light theme overrides */
-    [data-theme="light"] .msg.asst { background: #fff; border-color: #e2e2ea; }
+    [data-theme="light"] .header { background: linear-gradient(180deg, rgba(238,238,242,0.98), rgba(238,238,242,0.95)); }
+    [data-theme="light"] .pill { background: rgba(0,0,0,0.04); }
+    [data-theme="light"] .tab.sel { box-shadow: 0 0 12px rgba(91,94,255,0.12); }
+    [data-theme="light"] .detail-hdr { background: rgba(0,0,0,0.015); }
+    [data-theme="light"] .msg.asst { background: #fff; border-color: #e2e2ea; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
     [data-theme="light"] .msg.asst code { background: rgba(0,0,0,0.06); }
     [data-theme="light"] .msg.asst pre { background: #f6f6fa; border-color: #e2e2ea; }
     [data-theme="light"] .msg.asst strong { color: #1a1a2e; }
-    [data-theme="light"] .msg.asst h1, [data-theme="light"] .msg.asst h2, [data-theme="light"] .msg.asst h3 { color: #1a1a2e; }
+    [data-theme="light"] .msg.asst h1, [data-theme="light"] .msg.asst h2, [data-theme="light"] .msg.asst h3, [data-theme="light"] .msg.asst h4 { color: #1a1a2e; }
     [data-theme="light"] .msg.asst th { background: rgba(0,0,0,0.03); }
-    [data-theme="light"] .think i { color: #5b5eff; }
+    [data-theme="light"] .msg.asst blockquote { border-left-color: #5b5eff; }
+    [data-theme="light"] .msg .ts { opacity: 0.5; }
     [data-theme="light"] .sending-dot { background: rgba(0,0,0,0.2); }
-    [data-theme="light"] .bubble-claude .msg-loading { border-color: rgba(91,94,255,0.2); border-top-color: #5b5eff; }
+    [data-theme="light"] .think i { color: #5b5eff; }
+    [data-theme="light"] .input-bar { background: linear-gradient(180deg, var(--bg2), rgba(238,238,242,0.98)); }
+    [data-theme="light"] .input-bar input { background: #fff; }
     [data-theme="light"] .pill.live::before { box-shadow: 0 0 6px rgba(22,163,74,0.4); }
     [data-theme="light"] .logo { box-shadow: 0 2px 8px rgba(91,94,255,0.2); }
+    [data-theme="light"] .new-session-menu { background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .new-session-opt:active { background: rgba(91,94,255,0.08); }
+    [data-theme="light"] .empty-state svg { opacity: 0.1; }
+    [data-theme="light"] .msg.asst a { color: #4f46e5; }
+    [data-theme="light"] .tool-badge.bash { background: rgba(22,163,74,0.1); color: #16a34a; }
+    [data-theme="light"] .tool-badge.read { background: rgba(37,99,235,0.1); color: #2563eb; }
+    [data-theme="light"] .tool-badge.write, [data-theme="light"] .tool-badge.edit { background: rgba(202,138,4,0.1); color: #ca8a04; }
+    [data-theme="light"] .tool-badge.grep, [data-theme="light"] .tool-badge.glob { background: rgba(124,58,237,0.1); color: #7c3aed; }
+    [data-theme="light"] .tool-badge.web { background: rgba(8,145,178,0.1); color: #0891b2; }
+    [data-theme="light"] .tool-badge.agent { background: rgba(219,39,119,0.1); color: #db2777; }
+    [data-theme="light"] .tool-badge.ask { background: rgba(234,88,12,0.1); color: #ea580c; }
+    [data-theme="light"] .tool-badge.plan { background: rgba(79,70,229,0.1); color: #4f46e5; }
     .btn-new-session {
       background: rgba(255,255,255,0.04); border: 1px solid var(--border-subtle);
       color: var(--text2); cursor: pointer; padding: 4px 7px; border-radius: var(--radius-sm);
