@@ -787,7 +787,7 @@
       var isToolMsg = toolMatch && role !== 'user' && TOOL_META[toolName];
       if (isToolMsg) {
         var meta = TOOL_META[toolName];
-        var rest = content.substring(toolMatch[0].length);
+        var rest = toolMatch[2] || '';
         // First line after [ToolName] is the arg/summary
         var lines = rest.split('\n');
         var arg = lines[0] || '';
