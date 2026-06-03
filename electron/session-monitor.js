@@ -613,7 +613,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               if (name === 'AskUserQuestion' && input.questions) {
                 return input.questions.map(q => {
                   const opts = (q.options || []).map(o => `  • ${o.label}${o.description ? ': ' + o.description : ''}`).join('\n');
-                  return `❓ ${q.question || ''}` + (opts ? '\n' + opts : '');
+                  return `[${name}] ❓ ${q.question || ''}` + (opts ? '\n' + opts : '');
                 }).join('\n');
               }
               // ExitPlanMode: show plan
