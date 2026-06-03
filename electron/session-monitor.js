@@ -608,11 +608,14 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               || msg.content.filter(c => c.type === 'tool_use').map(c => `[${c.name}]`).join(' ');
           }
           if (!content || content.trim().length === 0) continue;
-          // Filter out system-injected messages (not real user input)
+          // Filter out command/terminal messages
           if (content.startsWith('<local-command') || content.startsWith('<command-name>')
-              || content.startsWith('<command-message>') || content.startsWith('<local-command-stdout>')
-              || content.startsWith('<system-reminder>') || content.startsWith('<task-notification>')
-              || content.startsWith('<command-caveat>')) continue;
+              || content.startsWith('<command-message>') || content.startsWith('<local-command-stdout>')) continue;
+          // System-injected messages: treat as assistant (left side), not user
+          // System-injected messages: treat as assistant (left side), not user
+          if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>'))) {
+            msg = { ...msg, role: 'system' };
+          }
           if (msg.role === 'user' && content.length > 5
               && !content.includes('<command-name>') && !content.includes('<local-command')) {
             lastUserContent = content.substring(0, 80);

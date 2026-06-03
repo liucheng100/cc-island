@@ -721,7 +721,7 @@
     function appendMsg(msg) {
       var div = document.createElement('div');
       var role = msg.role || 'system';
-      div.className = 'msg ' + (role === 'assistant' ? 'asst' : role === 'user' ? 'user' : 'sys');
+      div.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
       div.innerHTML = '<div>' + renderContent(msg.content || '') + '</div><div class="ts">' + formatTime(msg.timestamp) + '</div>';
       $msgList.appendChild(div);
     }
