@@ -822,7 +822,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         .tool-badge.tool-ask { background: rgba(251,146,60,0.25); color: #fdba74; }
         .tool-badge.tool-plan { background: rgba(99,102,241,0.2); color: #a5b4fc; }
 
-        .msg-content { word-break: break-word; cursor: text; }
+        .msg-content { word-break: break-word; cursor: text; font-size: 11px; }
         .bubble-user .msg-content { color: white; }
         .bubble-user .msg-content strong { color: #f0f0f5; }
         .bubble-user .msg-content em { color: #d0d0e0; }

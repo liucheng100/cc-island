@@ -657,8 +657,7 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>'))) {
             msg = { ...msg, role: 'system' };
           }
-          // Skip pure tool_result user messages only if all results were consumed by tool_use
-          if (msg.role === 'user' && Array.isArray(rawMsg.content) && rawMsg.content.every(c => c.type === 'tool_result') && leftoverResults && leftoverResults.length === 0) continue;
+          // Skip only system-injected user messages, never skip tool_result
           if (msg.role === 'user' && content.length > 5
               && !content.includes('<command-name>') && !content.includes('<local-command')) {
             lastUserContent = content.substring(0, 80);
