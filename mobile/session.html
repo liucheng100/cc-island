@@ -136,11 +136,12 @@
       -webkit-overflow-scrolling: touch;
     }
     .msg {
-      max-width: 88%; padding: 10px 14px; border-radius: 16px;
+      max-width: 92%; padding: 10px 14px; border-radius: 16px;
       font-size: 13.5px; line-height: 1.55;
       word-break: break-word; overflow-wrap: break-word; min-width: 0;
       animation: msgIn 0.25s ease-out;
     }
+    .msg.asst { max-width: 100%; }
     @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .msg.user {
       align-self: flex-end; color: #fff; border-bottom-right-radius: 6px;
