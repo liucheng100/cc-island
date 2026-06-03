@@ -179,16 +179,18 @@
     .msg.user a{color:#c7d2fe}
     /* Tool message badges */
     .tool-msg .tool-header {
-      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-      margin-bottom: 6px; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 6px;
+      cursor: pointer; user-select: none;
     }
+    .tool-msg.collapsed .tool-header { flex-wrap: nowrap; }
+    .tool-msg.expanded .tool-header { flex-wrap: wrap; margin-bottom: 6px; }
     .tool-badge {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
       white-space: nowrap;
     }
     .tool-arg {
-      font-size: 11px; color: var(--text2);
+      font-size: 11px; color: var(--text2); flex: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .tool-arrow {
@@ -747,6 +749,7 @@
       if (followBottom) scrollToBottom();
     });}
 
+    var toolExpanded = true; // default state for new tool messages
     var TOOL_META = {
       Bash: { icon: '🖥️', cls: 'bash', label: 'Bash' },
       Read: { icon: '📖', cls: 'read', label: 'Read' },
@@ -778,13 +781,22 @@
         var arg = lines[0] || '';
         var body = lines.slice(1).join('\n').trim();
         var displayContent = body || arg || '';
+        var state = toolExpanded ? 'expanded' : 'collapsed';
 
-        div.className = 'msg asst tool-msg collapsed';
+        div.className = 'msg asst tool-msg ' + state;
         var badge = '<span class="tool-badge ' + meta.cls + '">' + meta.icon + ' ' + meta.label + '</span>';
-        var argHtml = arg ? ' <span class="tool-arg">' + escapeHtml(arg.substring(0, 80)) + '</span>' : '';
-        var headerHTML = '<div class="tool-header" onclick="this.parentElement.classList.toggle(\'collapsed\');this.parentElement.classList.toggle(\'expanded\')">' + badge + argHtml + ' <span class="tool-arrow">▶</span></div>';
+        var argHtml = arg ? ' <span class="tool-arg">' + escapeHtml(arg.substring(0, 60)) + '</span>' : '';
+        var arrow = '<span class="tool-arrow">▶</span>';
+        var headerHTML = '<div class="tool-header">' + badge + argHtml + arrow + '</div>';
         var bodyHTML = displayContent ? '<div class="tool-body">' + renderContent(displayContent) + '</div>' : '';
         div.innerHTML = headerHTML + bodyHTML;
+        // Click header to toggle this message + update global state
+        div.querySelector('.tool-header').addEventListener('click', function() {
+          var isExpanded = div.classList.contains('expanded');
+          div.classList.toggle('expanded', !isExpanded);
+          div.classList.toggle('collapsed', isExpanded);
+          toolExpanded = !isExpanded;
+        });
       } else {
         div.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
         div.innerHTML = '<div>' + renderContent(content) + '</div><div class="ts">' + formatTime(msg.timestamp) + '</div>';
