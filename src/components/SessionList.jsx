@@ -795,7 +795,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         }
         .bubble-user .msg-time { color: rgba(255,255,255,0.6); }
         .bubble-claude {
-          background: rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.95);
           border-bottom-left-radius: 4px;
           overflow-x: auto;
         }
@@ -828,12 +828,12 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         .bubble-user .msg-content em { color: #d0d0e0; }
         .bubble-user .msg-content code { background: rgba(255,255,255,0.15); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 10px; }
         .bubble-user .msg-content a { color: #c7d2fe; }
-        .bubble-claude .msg-content { color: var(--text-primary); }
-        .bubble-claude .msg-content strong { color: var(--text-primary); font-weight: 700; }
-        .bubble-claude .msg-content em { color: var(--text-secondary); }
-        .bubble-claude .msg-content code { background: rgba(0,0,0,0.08); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 10px; }
+        .bubble-claude .msg-content { color: #1a1a2e; }
+        .bubble-claude .msg-content strong { color: #1a1a2e; font-weight: 700; }
+        .bubble-claude .msg-content em { color: #5a5a72; }
+        .bubble-claude .msg-content code { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 10px; }
         .bubble-claude .msg-content a { color: var(--accent); }
-        .msg-content pre { background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 5px; overflow-x: auto; margin: 3px 0; font-size: 10px; }
+        .msg-content pre { background: #f4f4f8; padding: 5px 8px; border-radius: 5px; overflow-x: auto; margin: 3px 0; font-size: 10px; }
         .msg-content pre code { background: none; padding: 0; }
         .msg-content ul, .msg-content ol { margin: 2px 0; padding-left: 14px; }
         .msg-content li { margin: 1px 0; }
