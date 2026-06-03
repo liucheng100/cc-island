@@ -781,11 +781,12 @@
       var role = msg.role || 'system';
       var content = msg.content || '';
 
-      // Detect tool use messages: lines starting with [ToolName]
-      var toolMatch = content.match(/^\[([A-Za-z]+)\]\s*(.*)/m);
-      if (toolMatch && role !== 'user') {
-        var toolName = toolMatch[1];
-        var meta = TOOL_META[toolName] || { icon: '⚙️', cls: 'other', label: toolName };
+      // Detect tool use messages: content starting with [KnownToolName]
+      var toolMatch = content.match(/^\[([A-Za-z]+)\]\s*([\s\S]*)/);
+      var toolName = toolMatch ? toolMatch[1] : '';
+      var isToolMsg = toolMatch && role !== 'user' && TOOL_META[toolName];
+      if (isToolMsg) {
+        var meta = TOOL_META[toolName];
         var rest = content.substring(toolMatch[0].length);
         // First line after [ToolName] is the arg/summary
         var lines = rest.split('\n');
