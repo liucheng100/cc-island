@@ -795,7 +795,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         }
         .bubble-user .msg-time { color: rgba(255,255,255,0.6); }
         .bubble-claude {
-          background: rgba(255,255,255,0.95);
+          background: rgba(255,255,255,0.45);
           border-bottom-left-radius: 4px;
           overflow-x: auto;
         }
