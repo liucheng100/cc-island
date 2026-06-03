@@ -608,8 +608,19 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
             const toolParts = msg.content.filter(c => c.type === 'tool_use').map(c => {
               const name = c.name || 'tool';
               const input = c.input || {};
-              const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || '';
-              return summary ? `[${name}] ${summary.substring(0, 100)}` : `[${name}]`;
+              // AskUserQuestion: extract question + options
+              if (name === 'AskUserQuestion' && input.questions) {
+                return input.questions.map(q => {
+                  const opts = (q.options || []).map(o => `  • ${o.label}${o.description ? ': ' + o.description : ''}`).join('\n');
+                  return `❓ ${q.question || ''}` + (opts ? '\n' + opts : '');
+                }).join('\n');
+              }
+              // ExitPlanMode: show plan
+              if (name === 'ExitPlanMode' && input.plan) {
+                return `[Plan] ${input.plan.substring(0, 200)}`;
+              }
+              const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || input.message || '';
+              return summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
             });
             content = [...textParts, ...toolParts].join('\n');
           }
