@@ -477,17 +477,14 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                             <div className="tool-header" onClick={() => setCollapsedTools(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next; })}>
                               <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
                               {collapsed && tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
-                              <span className="tool-arrow">{collapsed ? '▶' : '▼'}</span>
+                              <span className={`tool-arrow ${collapsed ? '' : 'tool-arrow-open'}`}>▶</span>
                             </div>
                             {!collapsed && tool.fullContent && (
                               <div className="tool-body">
                                 <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(tool.fullContent) }} />
                               </div>
                             )}
-                            <div className="msg-footer">
-                              <span className="msg-time">{formatTime(msg.timestamp)}</span>
-                              {showLoading && <span className="msg-loading" />}
-                            </div>
+                            {!collapsed && <div className="msg-footer"><span className="msg-time">{formatTime(msg.timestamp)}</span></div>}
                           </div>
                         </div>
                       );
@@ -798,7 +795,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         }
         .bubble-user .msg-time { color: rgba(255,255,255,0.6); }
         .bubble-claude {
-          background: var(--bg-glass);
+          background: rgba(255,255,255,0.08);
           border-bottom-left-radius: 4px;
           overflow-x: auto;
         }
@@ -811,18 +808,19 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; white-space: nowrap;
         }
         .tool-arg { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-        .tool-arrow { font-size: 9px; color: var(--text-muted); margin-left: auto; }
+        .tool-arrow { font-size: 9px; color: var(--text-muted); margin-left: auto; transition: transform 0.2s ease; display: inline-block; }
+        .tool-arrow-open { transform: rotate(90deg); }
         .tool-card.tool-collapsed .tool-body { display: none; }
         .tool-card.tool-expanded .tool-body { display: block; }
-        .tool-badge.tool-thinking { background: rgba(255,255,255,0.04); color: var(--text-muted); font-style: italic; }
-        .tool-badge.tool-bash { background: rgba(34,197,94,0.12); color: #22c55e; }
-        .tool-badge.tool-read { background: rgba(96,165,250,0.12); color: #60a5fa; }
-        .tool-badge.tool-write, .tool-badge.tool-edit { background: rgba(251,191,36,0.12); color: #fbbf24; }
-        .tool-badge.tool-grep, .tool-badge.tool-glob { background: rgba(167,139,250,0.12); color: #a78bfa; }
-        .tool-badge.tool-web { background: rgba(34,211,238,0.12); color: #22d3ee; }
-        .tool-badge.tool-agent { background: rgba(244,114,182,0.12); color: #f472b6; }
-        .tool-badge.tool-ask { background: rgba(251,146,60,0.15); color: #fb923c; }
-        .tool-badge.tool-plan { background: rgba(99,102,241,0.12); color: var(--accent); }
+        .tool-badge.tool-thinking { background: rgba(255,255,255,0.06); color: var(--text-secondary); font-style: italic; }
+        .tool-badge.tool-bash { background: rgba(34,197,94,0.2); color: #4ade80; }
+        .tool-badge.tool-read { background: rgba(96,165,250,0.2); color: #93bbfd; }
+        .tool-badge.tool-write, .tool-badge.tool-edit { background: rgba(251,191,36,0.2); color: #fcd34d; }
+        .tool-badge.tool-grep, .tool-badge.tool-glob { background: rgba(167,139,250,0.2); color: #c4b5fd; }
+        .tool-badge.tool-web { background: rgba(34,211,238,0.2); color: #67e8f9; }
+        .tool-badge.tool-agent { background: rgba(244,114,182,0.2); color: #f9a8d4; }
+        .tool-badge.tool-ask { background: rgba(251,146,60,0.25); color: #fdba74; }
+        .tool-badge.tool-plan { background: rgba(99,102,241,0.2); color: #a5b4fc; }
 
         .msg-content { word-break: break-word; cursor: text; }
         .bubble-user .msg-content { color: white; }
