@@ -177,50 +177,35 @@
     .msg.user pre{background:rgba(255,255,255,0.1);padding:10px 12px;border-radius:var(--radius-sm);overflow-x:auto;margin:4px 0;font-size:11px}
     .msg.user strong{color:#fff}
     .msg.user a{color:#c7d2fe}
-    /* Tool message cards */
-    .tool-msg {
-      align-self: flex-start; max-width: 100%; min-width: 0;
-      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-      border-radius: 10px; overflow: hidden; animation: msgIn 0.25s ease-out;
+    /* Tool message badges */
+    .tool-msg .tool-header {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      margin-bottom: 6px; cursor: pointer; user-select: none;
     }
-    .tool-header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 7px 10px; cursor: pointer; user-select: none;
-      transition: background 0.15s;
-    }
-    .tool-header:active { background: rgba(255,255,255,0.04); }
     .tool-badge {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
-      white-space: nowrap; flex-shrink: 0;
+      white-space: nowrap;
     }
-    .tool-badge .tool-icon { font-size: 12px; }
     .tool-arg {
-      flex: 1; min-width: 0; font-size: 11px; color: var(--text2);
+      font-size: 11px; color: var(--text2);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .tool-arrow {
-      font-size: 10px; color: var(--text3); transition: transform 0.2s; flex-shrink: 0;
+      font-size: 9px; color: var(--text3); transition: transform 0.2s; margin-left: auto;
     }
     .tool-msg.expanded .tool-arrow { transform: rotate(90deg); }
-    .tool-body {
-      display: none; padding: 0 10px 8px; font-size: 12px; line-height: 1.5;
-      color: var(--text); border-top: 1px solid var(--border);
-    }
-    .tool-msg.expanded .tool-body { display: block; padding-top: 8px; }
-    .tool-body pre { background: rgba(0,0,0,0.3); padding: 8px 10px; border-radius: 6px; overflow-x: auto; font-size: 11px; border: 1px solid var(--border); margin: 4px 0; }
-    .tool-body code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; font-size: 11px; }
-    .tool-body pre code { background: none; padding: 0; }
-    /* Tool badge colors */
-    .tool-badge.bash { background: rgba(52,214,115,0.12); color: #34d673; }
-    .tool-badge.read { background: rgba(96,165,250,0.12); color: #60a5fa; }
-    .tool-badge.write, .tool-badge.edit { background: rgba(251,191,36,0.12); color: #fbbf24; }
-    .tool-badge.grep, .tool-badge.glob { background: rgba(167,139,250,0.12); color: #a78bfa; }
-    .tool-badge.web { background: rgba(34,211,238,0.12); color: #22d3ee; }
-    .tool-badge.agent { background: rgba(244,114,182,0.12); color: #f472b6; }
-    .tool-badge.ask { background: rgba(251,146,60,0.15); color: #fb923c; }
-    .tool-badge.plan { background: rgba(99,102,241,0.12); color: var(--accent); }
-    .tool-badge.other { background: rgba(255,255,255,0.06); color: var(--text2); }
+    .tool-msg.collapsed .tool-body { display: none; }
+    .tool-msg.expanded .tool-body { display: block; }
+    .tool-badge.bash { background: rgba(52,214,115,0.15); color: #34d673; }
+    .tool-badge.read { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .tool-badge.write, .tool-badge.edit { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .tool-badge.grep, .tool-badge.glob { background: rgba(167,139,250,0.15); color: #a78bfa; }
+    .tool-badge.web { background: rgba(34,211,238,0.15); color: #22d3ee; }
+    .tool-badge.agent { background: rgba(244,114,182,0.15); color: #f472b6; }
+    .tool-badge.ask { background: rgba(251,146,60,0.18); color: #fb923c; }
+    .tool-badge.plan { background: rgba(99,102,241,0.15); color: var(--accent); }
+    .tool-badge.other { background: rgba(255,255,255,0.08); color: var(--text2); }
     .think { align-self: flex-start; padding: 8px 14px; display: flex; gap: 3px; }
     .think i { font-style: normal; font-size: 18px; color: var(--accent); animation: dotBounce 1.2s ease-in-out infinite; }
     .think i:nth-child(1){animation-delay:0s}
@@ -785,31 +770,21 @@
       var toolMatch = content.match(/^\[([A-Za-z]+)\]\s*([\s\S]*)/);
       var toolName = toolMatch ? toolMatch[1] : '';
       var isToolMsg = toolMatch && role !== 'user' && TOOL_META[toolName];
+
       if (isToolMsg) {
         var meta = TOOL_META[toolName];
         var rest = toolMatch[2] || '';
-        // First line after [ToolName] is the arg/summary
         var lines = rest.split('\n');
         var arg = lines[0] || '';
         var body = lines.slice(1).join('\n').trim();
+        var displayContent = body || arg || '';
 
-        div.className = 'tool-msg collapsed';
-        var headerHTML = '<div class="tool-header">'
-          + '<span class="tool-badge ' + meta.cls + '"><span class="tool-icon">' + meta.icon + '</span>' + meta.label + '</span>'
-          + (arg ? '<span class="tool-arg">' + escapeHtml(arg.substring(0, 80)) + '</span>' : '')
-          + '<span class="tool-arrow">▶</span>'
-          + '</div>';
-        var bodyHTML = '';
-        if (body || arg) {
-          var fullContent = body || arg;
-          bodyHTML = '<div class="tool-body">' + renderContent(fullContent) + '</div>';
-        }
+        div.className = 'msg asst tool-msg collapsed';
+        var badge = '<span class="tool-badge ' + meta.cls + '">' + meta.icon + ' ' + meta.label + '</span>';
+        var argHtml = arg ? ' <span class="tool-arg">' + escapeHtml(arg.substring(0, 80)) + '</span>' : '';
+        var headerHTML = '<div class="tool-header" onclick="this.parentElement.classList.toggle(\'collapsed\');this.parentElement.classList.toggle(\'expanded\')">' + badge + argHtml + ' <span class="tool-arrow">▶</span></div>';
+        var bodyHTML = displayContent ? '<div class="tool-body">' + renderContent(displayContent) + '</div>' : '';
         div.innerHTML = headerHTML + bodyHTML;
-        // Click to toggle
-        div.querySelector('.tool-header').addEventListener('click', function() {
-          div.classList.toggle('expanded');
-          div.classList.toggle('collapsed');
-        });
       } else {
         div.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
         div.innerHTML = '<div>' + renderContent(content) + '</div><div class="ts">' + formatTime(msg.timestamp) + '</div>';
