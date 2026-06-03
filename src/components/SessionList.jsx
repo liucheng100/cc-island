@@ -476,7 +476,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                           <div className={`bubble-claude tool-card ${collapsed ? 'tool-collapsed' : 'tool-expanded'}`}>
                             <div className="tool-header" onClick={() => setCollapsedTools(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next; })}>
                               <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
-                              {collapsed && tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
+                              {tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
                               <span className={`tool-arrow ${collapsed ? '' : 'tool-arrow-open'}`}>▶</span>
                             </div>
                             {!collapsed && tool.fullContent && (
