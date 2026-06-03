@@ -364,9 +364,9 @@ class LocalServer extends EventEmitter {
       this.io.on('connection', (socket) => {
         console.log('Client connected:', socket.id);
 
-        // Ping/pong heartbeat — keep connection alive (auth checked at connect time)
+        // Ping/pong heartbeat — verify auth on each cycle
         const pingTimer = setInterval(() => {
-          if (!socket.connected) { clearInterval(pingTimer); return; }
+          if (!socketAuth(socket)) return;
           socket.emit('ping');
         }, 1000);
 

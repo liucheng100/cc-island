@@ -602,7 +602,6 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
           if (!rawMsg || !rawMsg.role) continue;
           let msg = rawMsg;
           let content = '';
-          let isToolResultOnly = false;
           if (typeof msg.content === 'string') {
             content = msg.content;
           } else if (Array.isArray(msg.content)) {
@@ -624,16 +623,16 @@ if ($p.CommandLine -match '[A-Z]:[\\\\/][^\\"\\s]+') {
               const summary = input.query || input.command || input.prompt || input.url || input.file_path || input.path || input.message || '';
               return summary ? `[${name}] ${String(summary).substring(0, 100)}` : `[${name}]`;
             });
-            // Pure tool_result messages (no text/tool_use) should display as assistant
-            isToolResultOnly = resultParts.length > 0 && textParts.length === 0 && toolParts.length === 0;
+            // Skip pure tool_result messages (command output, git output, etc.)
+            if (resultParts.length > 0 && textParts.length === 0 && toolParts.length === 0 && thinkingParts.length === 0) continue;
             content = [...thinkingParts, ...textParts, ...toolParts, ...resultParts].join('\n');
           }
           if (!content || content.trim().length === 0) continue;
           // Filter out command/terminal messages
           if (content.startsWith('<local-command') || content.startsWith('<command-name>')
               || content.startsWith('<command-message>') || content.startsWith('<local-command-stdout>')) continue;
-          // System-injected messages and tool results: display as assistant (left side)
-          if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>') || isToolResultOnly)) {
+          // System-injected messages: display as assistant (left side)
+          if (msg.role === 'user' && (content.startsWith('<system-reminder>') || content.startsWith('<task-notification>') || content.startsWith('<command-caveat>'))) {
             msg = { ...msg, role: 'system' };
           }
           if (msg.role === 'user' && content.length > 5
