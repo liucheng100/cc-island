@@ -4,6 +4,35 @@ import { marked } from 'marked';
 
 marked.setOptions({ breaks: true, gfm: true });
 
+const TOOL_META = {
+  thinking: { icon: '💭', cls: 'thinking', label: '思考' },
+  Bash: { icon: '🖥️', cls: 'bash', label: 'Bash' },
+  Read: { icon: '📖', cls: 'read', label: 'Read' },
+  Write: { icon: '✏️', cls: 'write', label: 'Write' },
+  Edit: { icon: '✏️', cls: 'edit', label: 'Edit' },
+  Grep: { icon: '🔍', cls: 'grep', label: 'Grep' },
+  Glob: { icon: '🔍', cls: 'glob', label: 'Glob' },
+  WebSearch: { icon: '🌐', cls: 'web', label: 'Search' },
+  WebFetch: { icon: '🌐', cls: 'web', label: 'Fetch' },
+  Agent: { icon: '🤖', cls: 'agent', label: 'Agent' },
+  AskUserQuestion: { icon: '❓', cls: 'ask', label: 'Question' },
+  ExitPlanMode: { icon: '📋', cls: 'plan', label: 'Plan' },
+};
+
+function parseToolMsg(content) {
+  if (!content) return null;
+  const m = content.match(/^\[([A-Za-z]+)\]\s*([\s\S]*)/);
+  if (!m) return null;
+  const name = m[1];
+  const meta = TOOL_META[name];
+  if (!meta) return null;
+  const rest = m[2] || '';
+  const lines = rest.split('\n');
+  const arg = lines[0] || '';
+  const body = lines.slice(1).join('\n').trim();
+  return { meta, arg, body, fullContent: body || arg || '' };
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
   const html = marked.parse(text);
@@ -32,6 +61,7 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
   const [selectedId, setSelectedId] = useState(null);
   const [inputValues, setInputValues] = useState({});
   const [isSending, setIsSending] = useState(false);
+  const [toolExpanded, setToolExpanded] = useState(true);
   const [pendingSend, setPendingSend] = useState(false);
   const [sendError, setSendError] = useState(null);
   const [optimisticMsg, setOptimisticMsg] = useState(null);
@@ -438,6 +468,30 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                     const isUser = msg.role === 'user';
                     const isLastUser = isUser && i === recentMessages.length - 1;
                     const showLoading = isLastUser && (isSending || pendingSend);
+                    const tool = !isUser ? parseToolMsg(msg.content) : null;
+                    if (tool) {
+                      const expanded = toolExpanded;
+                      return (
+                        <div key={i} className="msg-row msg-row-claude">
+                          <div className={`bubble-claude tool-card ${expanded ? 'tool-expanded' : 'tool-collapsed'}`}>
+                            <div className="tool-header" onClick={() => setToolExpanded(!toolExpanded)}>
+                              <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
+                              {!expanded && tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
+                              <span className="tool-arrow">{expanded ? '▼' : '▶'}</span>
+                            </div>
+                            {expanded && tool.fullContent && (
+                              <div className="tool-body">
+                                <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(tool.fullContent) }} />
+                              </div>
+                            )}
+                            <div className="msg-footer">
+                              <span className="msg-time">{formatTime(msg.timestamp)}</span>
+                              {showLoading && <span className="msg-loading" />}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div key={i} className={`msg-row ${isUser ? 'msg-row-user' : 'msg-row-claude'}`}>
                         <div className={`msg-bubble ${isUser ? 'bubble-user' : 'bubble-claude'}`}>
@@ -748,6 +802,27 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
           border-bottom-left-radius: 4px;
           overflow-x: auto;
         }
+        /* Tool message cards */
+        .tool-card { padding: 6px 10px; }
+        .tool-card .tool-header { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+        .tool-card.tool-expanded .tool-header { margin-bottom: 6px; }
+        .tool-badge {
+          display: inline-flex; align-items: center; gap: 3px;
+          padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; white-space: nowrap;
+        }
+        .tool-arg { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+        .tool-arrow { font-size: 9px; color: var(--text-muted); margin-left: auto; }
+        .tool-card.tool-collapsed .tool-body { display: none; }
+        .tool-card.tool-expanded .tool-body { display: block; }
+        .tool-badge.tool-thinking { background: rgba(255,255,255,0.04); color: var(--text-muted); font-style: italic; }
+        .tool-badge.tool-bash { background: rgba(34,197,94,0.12); color: #22c55e; }
+        .tool-badge.tool-read { background: rgba(96,165,250,0.12); color: #60a5fa; }
+        .tool-badge.tool-write, .tool-badge.tool-edit { background: rgba(251,191,36,0.12); color: #fbbf24; }
+        .tool-badge.tool-grep, .tool-badge.tool-glob { background: rgba(167,139,250,0.12); color: #a78bfa; }
+        .tool-badge.tool-web { background: rgba(34,211,238,0.12); color: #22d3ee; }
+        .tool-badge.tool-agent { background: rgba(244,114,182,0.12); color: #f472b6; }
+        .tool-badge.tool-ask { background: rgba(251,146,60,0.15); color: #fb923c; }
+        .tool-badge.tool-plan { background: rgba(99,102,241,0.12); color: var(--accent); }
 
         .msg-content { word-break: break-word; cursor: text; }
         .bubble-user .msg-content { color: white; }
