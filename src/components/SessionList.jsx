@@ -473,18 +473,24 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
                       const collapsed = collapsedTools.has(i);
                       return (
                         <div key={i} className="msg-row msg-row-claude">
-                          <div className={`bubble-claude tool-card ${collapsed ? 'tool-collapsed' : 'tool-expanded'}`}>
-                            <div className="tool-header" onClick={() => setCollapsedTools(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next; })}>
-                              <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
-                              {tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
-                              <span className={`tool-arrow ${collapsed ? '' : 'tool-arrow-open'}`}>▶</span>
-                            </div>
-                            {!collapsed && tool.fullContent && (
-                              <div className="tool-body">
-                                <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(tool.fullContent) }} />
+                          <div className={`bubble-claude tool-card ${collapsed ? 'tool-collapsed' : 'tool-expanded'}`} onClick={() => setCollapsedTools(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next; })}>
+                            {collapsed && (
+                              <div className="tool-header">
+                                <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
+                                {tool.arg && <span className="tool-arg">{tool.arg.substring(0, 60)}</span>}
+                                <span className="tool-arrow">▶</span>
                               </div>
                             )}
-                            {!collapsed && <div className="msg-footer"><span className="msg-time">{formatTime(msg.timestamp)}</span></div>}
+                            {!collapsed && (
+                              <div className="tool-body">
+                                <div className="tool-expanded-header">
+                                  <span className={`tool-badge tool-${tool.meta.cls}`}>{tool.meta.icon} {tool.meta.label}</span>
+                                  {tool.arg && <span className="tool-arg-expanded">{tool.arg}</span>}
+                                </div>
+                                {tool.fullContent && <span className="msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(tool.fullContent) }} />}
+                                <div className="msg-footer"><span className="msg-time">{formatTime(msg.timestamp)}</span></div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
@@ -812,6 +818,8 @@ export default function SessionList({ sessions, wechatStatus, onShowQR, onSendMe
         .tool-arrow-open { transform: rotate(90deg); }
         .tool-card.tool-collapsed .tool-body { display: none; }
         .tool-card.tool-expanded .tool-body { display: block; }
+        .tool-expanded-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+        .tool-arg-expanded { font-size: 11px; color: var(--text-muted); }
         .tool-badge.tool-thinking { background: rgba(255,255,255,0.06); color: var(--text-secondary); font-style: italic; }
         .tool-badge.tool-bash { background: rgba(34,197,94,0.2); color: #4ade80; }
         .tool-badge.tool-read { background: rgba(96,165,250,0.2); color: #93bbfd; }

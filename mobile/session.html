@@ -194,7 +194,7 @@
       cursor: pointer; user-select: none;
     }
     .tool-msg.collapsed .tool-header { flex-wrap: nowrap; }
-    .tool-msg.expanded .tool-header { flex-wrap: wrap; margin-bottom: 6px; }
+    .tool-msg.expanded .tool-header { display: none; }
     .tool-badge {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
@@ -210,6 +210,8 @@
     .tool-msg.expanded .tool-arrow { transform: rotate(90deg); }
     .tool-msg.collapsed .tool-body { display: none; }
     .tool-msg.expanded .tool-body { display: block; }
+    .tool-expanded-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .tool-arg-expanded { font-size: 11px; color: var(--text2); }
     .tool-badge.bash { background: rgba(52,214,115,0.15); color: #34d673; }
     .tool-badge.read { background: rgba(96,165,250,0.15); color: #60a5fa; }
     .tool-badge.write, .tool-badge.edit { background: rgba(251,191,36,0.15); color: #fbbf24; }
@@ -840,10 +842,11 @@
         var argHtml = arg ? ' <span class="tool-arg">' + escapeHtml(arg.substring(0, 60)) + '</span>' : '';
         var arrow = '<span class="tool-arrow">▶</span>';
         var headerHTML = '<div class="tool-header">' + badge + argHtml + arrow + '</div>';
-        var bodyHTML = displayContent ? '<div class="tool-body">' + renderContent(displayContent) + '</div>' : '';
+        var expandedHeader = '<div class="tool-expanded-header">' + badge + (arg ? ' <span class="tool-arg-expanded">' + escapeHtml(arg) + '</span>' : '') + '</div>';
+        var bodyHTML = displayContent ? '<div class="tool-body">' + expandedHeader + renderContent(displayContent) + '</div>' : '';
         div.innerHTML = headerHTML + bodyHTML;
-        // Click header to toggle this message + update global state
-        div.querySelector('.tool-header').addEventListener('click', function() {
+        // Click to toggle
+        div.addEventListener('click', function() {
           var isExpanded = div.classList.contains('expanded');
           div.classList.toggle('expanded', !isExpanded);
           div.classList.toggle('collapsed', isExpanded);
